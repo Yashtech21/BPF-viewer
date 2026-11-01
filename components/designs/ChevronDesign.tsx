@@ -12,10 +12,12 @@
 import * as React from 'react';
 import { useMemo } from 'react';
 import { makeStyles, mergeClasses } from '@fluentui/react-components';
+import { CheckmarkFilled } from '@fluentui/react-icons';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
 import { getStageLabel } from '../../utils/themeUtils';
-import { TRANSITION_DURATION, PULSE_DURATION } from './designConstants';
+import { TRANSITION_DURATION, PULSE_DURATION, PULSE_GLOW_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const useChevronStyles = makeStyles({
   container: {
@@ -38,6 +40,9 @@ const useChevronStyles = makeStyles({
     transitionProperty: 'all',
     transitionDuration: TRANSITION_DURATION,
     minWidth: 0,
+    ':hover': {
+      filter: 'brightness(1.08)',
+    },
   },
   stageMobile: {
     fontSize: '10px',
@@ -46,14 +51,20 @@ const useChevronStyles = makeStyles({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    minWidth: 0,
+  },
+  check: {
+    fontSize: '12px',
+    flexShrink: 0,
   },
   pulse: {
-    animationName: {
-      '0%, 100%': { opacity: 1 },
-      '50%': { opacity: 0.7 },
-    },
+    animationName: PULSE_GLOW_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -121,8 +132,8 @@ const ChevronDesignComponent: React.FC<IBPFDesignProps> = ({
       }`}
     >
       {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }, index) => (
+        <StageHoverCard key={stage.stageId} stage={stage} status={status} index={index} total={stageMetadata.length}>
         <div
-          key={stage.stageId}
           className={mergeClasses(
             styles.stage,
             isMobile && styles.stageMobile,
@@ -145,9 +156,11 @@ const ChevronDesignComponent: React.FC<IBPFDesignProps> = ({
             className={styles.label}
             style={getLabelPadding(index, stageMetadata.length)}
           >
+            {status === 'completed' && <CheckmarkFilled className={styles.check} aria-hidden="true" />}
             {label}
           </span>
         </div>
+        </StageHoverCard>
       ))}
     </div>
   );

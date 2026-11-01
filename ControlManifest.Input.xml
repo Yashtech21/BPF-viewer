@@ -3,7 +3,7 @@
   <control
     namespace="ADC"
     constructor="BusinessProcessFlowViewer"
-    version="1.0.0"
+    version="1.1.0"
     display-name-key="BusinessProcessFlowViewer"
     description-key="BusinessProcessFlowViewer_Desc"
     control-type="virtual"
@@ -38,8 +38,9 @@
       of-type="Enum"
       usage="input"
       required="true"
-      default-value="chevron"
+      default-value="modern"
     >
+      <value name="modern" display-name-key="DesignModern">modern</value>
       <value name="chevron" display-name-key="DesignChevron">chevron</value>
       <value name="circles" display-name-key="DesignCircles">circles</value>
       <value name="pills" display-name-key="DesignPills">pills</value>
@@ -121,6 +122,73 @@
       <value name="no" display-name-key="No">no</value>
     </property>
 
+    <!-- Stage details hover card -->
+    <property
+      name="enableStageDetails"
+      display-name-key="EnableStageDetails"
+      description-key="EnableStageDetails_Desc"
+      of-type="Enum"
+      usage="input"
+      required="true"
+      default-value="yes"
+    >
+      <value name="yes" display-name-key="Yes">yes</value>
+      <value name="no" display-name-key="No">no</value>
+    </property>
+
+    <!-- Search / filter / sort toolbar -->
+    <property
+      name="showToolbar"
+      display-name-key="ShowToolbar"
+      description-key="ShowToolbar_Desc"
+      of-type="Enum"
+      usage="input"
+      required="true"
+      default-value="yes"
+    >
+      <value name="yes" display-name-key="Yes">yes</value>
+      <value name="no" display-name-key="No">no</value>
+    </property>
+
+    <!-- Overdue threshold (days in active stage). Empty or 0 disables. -->
+    <property
+      name="stageAgeWarningDays"
+      display-name-key="StageAgeWarningDays"
+      description-key="StageAgeWarningDays_Desc"
+      of-type="Whole.None"
+      usage="input"
+      required="false"
+    />
+
+    <!-- Where to open a record -->
+    <property
+      name="navigationTarget"
+      display-name-key="NavigationTarget"
+      description-key="NavigationTarget_Desc"
+      of-type="Enum"
+      usage="input"
+      required="true"
+      default-value="newWindow"
+    >
+      <value name="newWindow" display-name-key="NavNewWindow">newWindow</value>
+      <value name="sameWindow" display-name-key="NavSameWindow">sameWindow</value>
+      <value name="dialog" display-name-key="NavDialog">dialog</value>
+    </property>
+
+    <!-- Row density -->
+    <property
+      name="density"
+      display-name-key="Density"
+      description-key="Density_Desc"
+      of-type="Enum"
+      usage="input"
+      required="true"
+      default-value="comfortable"
+    >
+      <value name="comfortable" display-name-key="DensityComfortable">comfortable</value>
+      <value name="compact" display-name-key="DensityCompact">compact</value>
+    </property>
+
     <!-- ========================================
          COLOR CONFIGURATION
          ======================================== -->
@@ -166,7 +234,7 @@
       <platform-library name="React" version="16.14.0" />
       <platform-library name="Fluent" version="9.46.2" />
       <!-- Localization -->
-      <resx path="strings/BusinessProcessFlowViewer.1033.resx" version="1.0.0" />
+      <resx path="strings/BusinessProcessFlowViewer.1033.resx" version="1.1.0" />
     </resources>
 
     <feature-usage>

@@ -5,12 +5,17 @@
 // Define IInputs and IOutputs Type. They should match with ControlManifest.
 export interface IInputs {
     parametersBPF: ComponentFramework.PropertyTypes.StringProperty;
-    designStyle: ComponentFramework.PropertyTypes.EnumProperty<"chevron" | "circles" | "pills" | "segmented" | "stepper" | "gradient" | "line" | "fraction">;
+    designStyle: ComponentFramework.PropertyTypes.EnumProperty<"modern" | "chevron" | "circles" | "pills" | "segmented" | "stepper" | "gradient" | "line" | "fraction">;
     displayMode: ComponentFramework.PropertyTypes.EnumProperty<"stage" | "category">;
     recordNameSize: ComponentFramework.PropertyTypes.EnumProperty<"small" | "medium" | "large">;
     showEntityName: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
     enableNavigation: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
     showPulseAnimation: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
+    enableStageDetails: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
+    showToolbar: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
+    stageAgeWarningDays: ComponentFramework.PropertyTypes.WholeNumberProperty;
+    navigationTarget: ComponentFramework.PropertyTypes.EnumProperty<"newWindow" | "sameWindow" | "dialog">;
+    density: ComponentFramework.PropertyTypes.EnumProperty<"comfortable" | "compact">;
     usePlatformTheme: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
     completedColor: ComponentFramework.PropertyTypes.StringProperty;
     completedTextColor: ComponentFramework.PropertyTypes.StringProperty;

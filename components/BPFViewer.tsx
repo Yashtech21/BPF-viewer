@@ -9,6 +9,14 @@ import { FluentProvider, webLightTheme, makeStyles, tokens, Spinner, Button, The
 import { ArrowClockwiseRegular, ErrorCircleRegular } from '@fluentui/react-icons';
 import { IBPFViewerProps } from '../types';
 import { BPFRow } from './BPFRow';
+import {
+  BPFToolbar,
+  DEFAULT_LIST_VIEW,
+  IListViewState,
+  applyListView,
+  getStageDistribution,
+} from './BPFToolbar';
+import { getAgeSeverity, getDaysInActiveStage } from '../utils/stageDetails';
 import { ErrorBoundary } from './ErrorBoundary';
 
 const MOBILE_BREAKPOINT = 480;
@@ -56,6 +64,12 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
   },
+  noMatches: {
+    padding: '24px',
+    textAlign: 'center',
+    color: tokens.colorNeutralForeground3,
+    fontSize: '13px',
+  },
 });
 
 // Hook to detect narrow container using ResizeObserver
@@ -90,10 +104,34 @@ const BPFViewerInner: React.FC<IBPFViewerProps & { containerRef: React.RefObject
   error,
   onNavigate,
   onRefresh,
+  loaders,
+  now: nowProp,
   containerRef,
 }) => {
   const styles = useStyles();
   const isMobile = useContainerMobile(containerRef);
+  const [view, setView] = React.useState<IListViewState>(DEFAULT_LIST_VIEW);
+
+  // One reference time per data refresh keeps rows memoizable
+  const now = React.useMemo(() => nowProp ?? Date.now(), [nowProp, records]);
+
+  const warningDays = settings.stageAgeWarningDays;
+  const visibleRecords = React.useMemo(
+    () => (settings.showToolbar ? applyListView(records, view, settings.displayMode, warningDays, now) : records),
+    [records, view, settings.showToolbar, settings.displayMode, warningDays, now]
+  );
+  const overdueCount = React.useMemo(
+    () =>
+      records.filter(r => {
+        const severity = getAgeSeverity(getDaysInActiveStage(r.bpfInstance, now), warningDays);
+        return severity === 'warning' || severity === 'danger';
+      }).length,
+    [records, warningDays, now]
+  );
+  const distribution = React.useMemo(
+    () => (settings.showToolbar ? getStageDistribution(records, settings.displayMode) : []),
+    [records, settings.showToolbar, settings.displayMode]
+  );
 
   // Global loading state
   if (isLoading && records.length === 0) {
@@ -135,32 +173,59 @@ const BPFViewerInner: React.FC<IBPFViewerProps & { containerRef: React.RefObject
 
   // Records list
   return (
-    <div
-      className={styles.recordsList}
-      role="list"
-      aria-label={`${records.length} record${records.length !== 1 ? 's' : ''} with business process flow`}
-    >
-      {records.map((record) => (
-        <div key={record.recordId} role="listitem">
-          {settings.enableNavigation && onNavigate ? (
-            <BPFRow
-              record={record}
-              settings={{ ...settings, enableNavigation: true as const }}
-              colors={colors}
-              isMobile={isMobile}
-              onNavigate={onNavigate}
-            />
-          ) : (
-            <BPFRow
-              record={record}
-              settings={{ ...settings, enableNavigation: false as const }}
-              colors={colors}
-              isMobile={isMobile}
-            />
-          )}
+    <>
+      {settings.showToolbar && (
+        <BPFToolbar
+          view={view}
+          onChange={setView}
+          totalCount={records.length}
+          shownCount={visibleRecords.length}
+          overdueCount={overdueCount}
+          showOverdueFilter={!!warningDays && warningDays > 0}
+          distribution={distribution}
+          isMobile={isMobile}
+          onRefresh={onRefresh}
+        />
+      )}
+      <div
+        className={styles.recordsList}
+        role="list"
+        aria-label={`${visibleRecords.length} record${visibleRecords.length !== 1 ? 's' : ''} with business process flow`}
+      >
+        {visibleRecords.map((record) => (
+          <div key={record.recordId} role="listitem">
+            {settings.enableNavigation && onNavigate ? (
+              <BPFRow
+                record={record}
+                settings={{ ...settings, enableNavigation: true as const }}
+                colors={colors}
+                isMobile={isMobile}
+                onNavigate={onNavigate}
+                loaders={loaders}
+                now={now}
+              />
+            ) : (
+              <BPFRow
+                record={record}
+                settings={{ ...settings, enableNavigation: false as const }}
+                colors={colors}
+                isMobile={isMobile}
+                loaders={loaders}
+                now={now}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      {visibleRecords.length === 0 && (
+        <div className={styles.noMatches} role="status">
+          No records match the current filters.{' '}
+          <Button size="small" appearance="transparent" onClick={() => setView(DEFAULT_LIST_VIEW)}>
+            Clear filters
+          </Button>
         </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 };
 

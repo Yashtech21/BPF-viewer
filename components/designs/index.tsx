@@ -1,16 +1,18 @@
 /**
  * BPF Design Components - Main Export
  *
- * This file exports all 8 visual styles for displaying BPF stages.
+ * This file exports all 9 visual styles for displaying BPF stages.
  * Each design is now in its own file for better organization and maintainability.
  *
- * ChevronDesign is imported eagerly (static import) since it's the default
- * design style. The remaining 7 designs are lazy-loaded on demand.
+ * ModernDesign (the default for new configurations) and ChevronDesign (the
+ * fallback for unknown values) are imported eagerly. The remaining 7 designs
+ * are lazy-loaded on demand.
  */
 
 import * as React from 'react';
 import type { IBPFDesignProps, DesignStyle } from '../../types';
 import { ChevronDesign } from './ChevronDesign';
+import { ModernDesign } from './ModernDesign';
 
 // Lazy load non-default design components
 const CircleDesign = React.lazy(() => import('./CircleDesign').then(m => ({ default: m.CircleDesign })));
@@ -22,6 +24,7 @@ const LineDesign = React.lazy(() => import('./LineDesign').then(m => ({ default:
 const FractionDesign = React.lazy(() => import('./FractionDesign').then(m => ({ default: m.FractionDesign })));
 
 export {
+  ModernDesign,
   ChevronDesign,
   CircleDesign,
   PillDesign,
@@ -43,6 +46,8 @@ export function getDesignComponent(designStyle: DesignStyle | string): DesignCom
   const normalizedStyle = designStyle.toLowerCase().trim();
 
   switch (normalizedStyle) {
+    case 'modern':
+      return ModernDesign;
     case 'chevron':
       return ChevronDesign;
     case 'circles':

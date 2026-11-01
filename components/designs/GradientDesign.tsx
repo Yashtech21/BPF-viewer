@@ -14,7 +14,8 @@ import { useMemo } from 'react';
 import { makeStyles, mergeClasses } from '@fluentui/react-components';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
-import { TRANSITION_DURATION, PULSE_DURATION, PROGRESS_TRANSITION_DURATION } from './designConstants';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { TRANSITION_DURATION, PULSE_DURATION, PROGRESS_TRANSITION_DURATION, PULSE_RING_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const useGradientStyles = makeStyles({
   container: {
@@ -89,12 +90,10 @@ const useGradientStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   pulse: {
-    animationName: {
-      '0%, 100%': { opacity: 1 },
-      '50%': { opacity: 0.7 },
-    },
+    animationName: PULSE_RING_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -130,7 +129,8 @@ const GradientDesignComponent: React.FC<IBPFDesignProps> = ({
         />
         <div className={mergeClasses(styles.markersContainer, isMobile && styles.markersContainerMobile)}>
           {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }, index) => (
-            <div key={stage.stageId} className={styles.markerWrapper}>
+            <StageHoverCard key={stage.stageId} stage={stage} status={status} index={index} total={stageMetadata.length}>
+            <div className={styles.markerWrapper}>
               <div
                 className={mergeClasses(
                   styles.marker,
@@ -151,6 +151,7 @@ const GradientDesignComponent: React.FC<IBPFDesignProps> = ({
                 </span>
               )}
             </div>
+            </StageHoverCard>
           ))}
         </div>
       </div>

@@ -12,6 +12,7 @@ import * as React from 'react';
 import { makeStyles } from '@fluentui/react-components';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
 import { getStageLabel } from '../../utils/themeUtils';
 import { PROGRESS_TRANSITION_DURATION } from './designConstants';
 
@@ -63,7 +64,7 @@ const FractionDesignComponent: React.FC<IBPFDesignProps> = ({
   colors,
 }) => {
   const styles = useFractionStyles();
-  const { a11yMetadata } = useBPFDesignHelpers(stages, displayMode, colors, false);
+  const { a11yMetadata, stageMetadata } = useBPFDesignHelpers(stages, displayMode, colors, false);
 
   if (stages.length === 0) {
     return (
@@ -80,7 +81,10 @@ const FractionDesignComponent: React.FC<IBPFDesignProps> = ({
   const progressPercent = a11yMetadata.progressPercent;
   const label = getStageLabel(currentStage.stageName, currentStage.stageCategoryName, displayMode);
 
+  const currentMeta = stageMetadata[currentStepNumber - 1] ?? stageMetadata[stageMetadata.length - 1];
+
   return (
+    <StageHoverCard stage={currentMeta.stage} status={currentMeta.status} index={currentStepNumber - 1} total={stages.length}>
     <div
       className={styles.container}
       role="progressbar"
@@ -116,6 +120,7 @@ const FractionDesignComponent: React.FC<IBPFDesignProps> = ({
         </div>
       </div>
     </div>
+    </StageHoverCard>
   );
 };
 

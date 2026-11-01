@@ -13,7 +13,8 @@ import { makeStyles, mergeClasses } from '@fluentui/react-components';
 import { StageIcon } from "./shared/StageIcon";
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
-import { TRANSITION_DURATION, PULSE_DURATION, PROGRESS_TRANSITION_DURATION } from './designConstants';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { TRANSITION_DURATION, PULSE_DURATION, PROGRESS_TRANSITION_DURATION, PULSE_RING_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const useLineStyles = makeStyles({
   container: {
@@ -99,13 +100,10 @@ const useLineStyles = makeStyles({
     fontSize: '9px',
   },
   pulse: {
-    animationName: {
-      '0%': { transform: 'scale(1)', opacity: 1 },
-      '50%': { transform: 'scale(1.1)', opacity: 0.8 },
-      '100%': { transform: 'scale(1)', opacity: 1 },
-    },
+    animationName: PULSE_RING_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -137,7 +135,8 @@ const LineDesignComponent: React.FC<IBPFDesignProps> = ({
         />
         <div className={mergeClasses(styles.markersContainer, isMobile && styles.markersContainerMobile)}>
           {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }, index) => (
-            <div key={stage.stageId} className={styles.markerWrapper}>
+            <StageHoverCard key={stage.stageId} stage={stage} status={status} index={index} total={stageMetadata.length}>
+            <div className={styles.markerWrapper}>
               <div
                 className={mergeClasses(
                   styles.marker,
@@ -166,6 +165,7 @@ const LineDesignComponent: React.FC<IBPFDesignProps> = ({
                 {label}
               </span>
             </div>
+            </StageHoverCard>
           ))}
         </div>
       </div>

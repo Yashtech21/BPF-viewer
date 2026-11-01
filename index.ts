@@ -20,6 +20,9 @@ import {
   DesignStyle,
   DisplayMode,
   RecordNameSize,
+  NavigationTarget,
+  Density,
+  IStageDetailsLoaders,
 } from './types';
 import {
   resolveColors,
@@ -54,6 +57,7 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
   // Bound handlers (created once in init to preserve reference identity for React.memo)
   private boundNavigate: (entityName: string, recordId: string) => void = () => {};
   private boundRefresh: () => void = () => {};
+  private loaders: IStageDetailsLoaders = {};
 
   // Cached settings/colors to avoid creating new objects every render
   private cachedSettings: IControlSettings | null = null;
@@ -77,6 +81,13 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
     // Initialize BPF Service with client URL for RetrieveActivePath function calls
     const clientUrl = (globalThis as any).Xrm?.Utility?.getGlobalContext?.()?.getClientUrl?.() || '';
     this.bpfService = new BPFService(context.webAPI, clientUrl);
+
+    // Stable loaders for stage hover cards (lazy, cached in the service)
+    const service = this.bpfService;
+    this.loaders = {
+      loadStageSteps: (stage) => service.getStageSteps(stage),
+      loadRecordValues: (entityName, recordId) => service.getRecordValues(entityName, recordId),
+    };
 
     // Parse BPF configuration
     this.parseBPFConfiguration();
@@ -125,14 +136,25 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
    */
   private getSettings(): IControlSettings {
     const params = this.context.parameters;
+    // Properties added in v1.1 may be missing on forms configured with v1.0,
+    // so they fall back to the documented defaults rather than "off".
+    const yesNo = (raw: string | null | undefined, fallback: boolean): boolean =>
+      raw === 'yes' ? true : raw === 'no' ? false : fallback;
+    const warningRaw = params.stageAgeWarningDays?.raw;
+
     return {
-      designStyle: (params.designStyle?.raw as DesignStyle) || 'chevron',
+      designStyle: (params.designStyle?.raw as DesignStyle) || 'modern',
       displayMode: (params.displayMode?.raw as DisplayMode) || 'stage',
       recordNameSize: (params.recordNameSize?.raw as RecordNameSize) || 'medium',
       showEntityName: params.showEntityName?.raw === 'yes',
       enableNavigation: params.enableNavigation?.raw === 'yes',
       showPulseAnimation: params.showPulseAnimation?.raw === 'yes',
       usePlatformTheme: params.usePlatformTheme?.raw === 'yes',
+      enableStageDetails: yesNo(params.enableStageDetails?.raw, true),
+      showToolbar: yesNo(params.showToolbar?.raw, true),
+      stageAgeWarningDays: typeof warningRaw === 'number' && warningRaw > 0 ? Math.floor(warningRaw) : null,
+      navigationTarget: (params.navigationTarget?.raw as NavigationTarget) || 'newWindow',
+      density: (params.density?.raw as Density) || 'comfortable',
     };
   }
 
@@ -189,7 +211,15 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
     }
 
     // Cache settings/colors to preserve reference identity for React.memo
-    const settingsVersion = `${context.parameters.designStyle?.raw}_${context.parameters.displayMode?.raw}_${context.parameters.recordNameSize?.raw}_${context.parameters.showEntityName?.raw}_${context.parameters.enableNavigation?.raw}_${context.parameters.showPulseAnimation?.raw}_${context.parameters.usePlatformTheme?.raw}`;
+    const p = context.parameters;
+    const settingsVersion = [
+      p.designStyle?.raw, p.displayMode?.raw, p.recordNameSize?.raw, p.showEntityName?.raw,
+      p.enableNavigation?.raw, p.showPulseAnimation?.raw, p.usePlatformTheme?.raw,
+      p.enableStageDetails?.raw, p.showToolbar?.raw, p.stageAgeWarningDays?.raw,
+      p.navigationTarget?.raw, p.density?.raw,
+      p.completedColor?.raw, p.completedTextColor?.raw, p.activeColor?.raw,
+      p.activeTextColor?.raw, p.inactiveColor?.raw, p.inactiveTextColor?.raw,
+    ].join('_');
     if (settingsVersion !== this.lastSettingsVersion) {
       this.lastSettingsVersion = settingsVersion;
       this.cachedSettings = this.getSettings();
@@ -210,6 +240,7 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
       allocatedHeight: context.mode.allocatedHeight,
       onNavigate: this.boundNavigate,
       onRefresh: this.boundRefresh,
+      loaders: this.loaders,
     });
   }
 
@@ -426,10 +457,30 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
       return;
     }
 
+    const target = this.cachedSettings?.navigationTarget ?? this.getSettings().navigationTarget ?? 'newWindow';
+
+    if (target === 'dialog') {
+      // Model-driven apps: open the record in a centered modal dialog and
+      // refresh the BPF data when it closes (the stage may have moved).
+      const navigateTo = (globalThis as any).Xrm?.Navigation?.navigateTo;
+      if (typeof navigateTo === 'function') {
+        Promise.resolve(
+          navigateTo(
+            { pageType: 'entityrecord', entityName, entityId: recordId },
+            { target: 2, position: 1, width: { value: 80, unit: '%' }, height: { value: 85, unit: '%' } }
+          )
+        )
+          .then(() => this.handleRefresh())
+          .catch((e: unknown) => logger.warn('Dialog navigation failed:', e));
+        return;
+      }
+      // Not available (e.g. canvas apps / test harness) — fall back to a new window
+    }
+
     this.context.navigation.openForm({
       entityName,
       entityId: recordId,
-      openInNewWindow: true,
+      openInNewWindow: target !== 'sameWindow',
     });
   }
 

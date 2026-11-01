@@ -5,6 +5,37 @@ All notable changes to the Business Process Flow Viewer will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-01
+
+Fork of the upstream 1.0.0 control with richer stage information and a modernised UI.
+Existing configurations keep working: new properties default sensibly when absent.
+
+### Added
+
+- **Stage details hover card** on every stage of every design (mouse hover with a short delay, or keyboard focus):
+  status, *Stage X of Y*, category, time in the active stage with overdue warning, the stage's steps with
+  required markers, which fields are filled in (with values), missing required fields, and process status,
+  start/finish dates and last-modified-by.
+- **Modern** design style (Fluent 2 progress tiles) — new default for new configurations.
+- **Toolbar**: search, status filter (incl. *Overdue*, *No process*), sort, record/overdue counts, refresh,
+  per-stage count chips that filter the list.
+- `stageAgeWarningDays` property: amber/red badges and row accent for records stuck in a stage.
+- `navigationTarget` property: open records in a new window, the same window, or a modal dialog.
+- `density` property: comfortable or compact rows.
+- `enableStageDetails` and `showToolbar` properties.
+- Row header shows *Finished* / *Aborted* badges, time-in-stage badge and % complete.
+- `BPFService.getStageSteps` (parses `processstage.clientdata`, cached) and `BPFService.getRecordValues` (cached 60s).
+- BPF instances now carry `processStatus`, `createdOn`, `modifiedOn`, `completedOn`, `activeStageStartedOn`, `modifiedByName`.
+- 82 new tests (453 total), including axe checks with hover cards enabled.
+
+### Changed
+
+- Pulse animation is now a soft ring/glow instead of an opacity blink, and is disabled under *prefers-reduced-motion*.
+- Completed chevrons show a checkmark.
+- Aborted processes no longer pulse and are rendered as stopped.
+- When hover cards are enabled the row is no longer `role="button"` (avoids nested interactive controls);
+  the record name is the keyboard "open" control and the row stays clickable with the mouse.
+
 ## [1.0.0] - 2026-02-19
 
 First stable release. Complete rewrite from vanilla JavaScript to a modern React + TypeScript Virtual PCF control with Fluent UI v9 theming.

@@ -13,7 +13,8 @@ import * as React from 'react';
 import { makeStyles, mergeClasses } from '@fluentui/react-components';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
-import { TRANSITION_DURATION, PULSE_DURATION, CONNECTOR } from './designConstants';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { TRANSITION_DURATION, PULSE_DURATION, CONNECTOR, PULSE_RING_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const useStepperStyles = makeStyles({
   container: {
@@ -62,12 +63,10 @@ const useStepperStyles = makeStyles({
     marginTop: '14px',
   },
   pulse: {
-    animationName: {
-      '0%, 100%': { opacity: 1 },
-      '50%': { opacity: 0.7 },
-    },
+    animationName: PULSE_RING_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -88,6 +87,7 @@ const StepperDesignComponent: React.FC<IBPFDesignProps> = ({
 
         return (
           <React.Fragment key={stage.stageId}>
+            <StageHoverCard stage={stage} status={status} index={index} total={stageMetadata.length}>
             <div className={styles.stageWrapper}>
               <div
                 className={mergeClasses(
@@ -107,6 +107,7 @@ const StepperDesignComponent: React.FC<IBPFDesignProps> = ({
                 {label}
               </span>
             </div>
+            </StageHoverCard>
             {!isLast && (
               <div
                 className={styles.connector}

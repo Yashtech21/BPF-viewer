@@ -11,7 +11,8 @@ import * as React from 'react';
 import { makeStyles, mergeClasses } from '@fluentui/react-components';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
-import { TRANSITION_DURATION, PULSE_DURATION } from './designConstants';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { TRANSITION_DURATION, PULSE_DURATION, PULSE_RING_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const usePillStyles = makeStyles({
   container: {
@@ -46,12 +47,10 @@ const usePillStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   pulse: {
-    animationName: {
-      '0%, 100%': { opacity: 1 },
-      '50%': { opacity: 0.7 },
-    },
+    animationName: PULSE_RING_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -67,9 +66,9 @@ const PillDesignComponent: React.FC<IBPFDesignProps> = ({
 
   return (
     <div className={mergeClasses(styles.container, isMobile && styles.containerMobile)}>
-      {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }) => (
+      {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }, index) => (
+        <StageHoverCard key={stage.stageId} stage={stage} status={status} index={index} total={stageMetadata.length}>
         <div
-          key={stage.stageId}
           className={mergeClasses(
             styles.pill,
             isMobile && styles.pillMobile,
@@ -83,6 +82,7 @@ const PillDesignComponent: React.FC<IBPFDesignProps> = ({
         >
           <span className={styles.label}>{label}</span>
         </div>
+        </StageHoverCard>
       ))}
     </div>
   );

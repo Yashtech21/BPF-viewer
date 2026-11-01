@@ -34,3 +34,30 @@ export const LABEL_FONT_SIZE = {
   regular: '11px',
   large: '12px',
 } as const;
+
+/**
+ * Modern "ring" pulse for round/pill markers: an expanding soft halo
+ * instead of the old opacity blink. Neutral shadow works on any brand color.
+ */
+export const PULSE_RING_KEYFRAMES = {
+  '0%': { boxShadow: '0 0 0 0 rgba(0, 0, 0, 0.22)' },
+  '70%': { boxShadow: '0 0 0 7px rgba(0, 0, 0, 0)' },
+  '100%': { boxShadow: '0 0 0 0 rgba(0, 0, 0, 0)' },
+};
+
+/**
+ * Glow pulse for clipped shapes (chevrons, segments) where box-shadow
+ * would be clipped away.
+ */
+export const PULSE_GLOW_KEYFRAMES = {
+  '0%, 100%': { filter: 'brightness(1)' },
+  '50%': { filter: 'brightness(1.15) saturate(1.1)' },
+};
+
+/** Disable motion for users who ask for it */
+export const REDUCED_MOTION = {
+  '@media (prefers-reduced-motion: reduce)': {
+    animationName: 'none',
+    transitionDuration: '0s',
+  },
+} as const;

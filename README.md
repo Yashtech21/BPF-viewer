@@ -38,6 +38,44 @@
 
 ---
 
+## What's new in 1.1 (this fork)
+
+> Fork of [allandecastro/business-process-flow-viewer](https://github.com/allandecastro/business-process-flow-viewer) (MIT) by Allan De Castro, extended with stage hover cards, a modern design and list tooling.
+
+<p align="center">
+  <img src="docs/screenshot-hover-card.png" alt="Modern design with the stage details hover card" width="100%">
+</p>
+
+| Feature | What you get |
+|---------|--------------|
+| **Stage details on hover** | Hover (or Tab to) any stage in any design to open a card with: status, *Stage X of Y*, category, **time in the current stage** (with overdue warning), the stage's **steps/fields** with required markers, **which fields are filled in** (with their values) and how many required fields are still missing, plus process status, start/finish dates and *last updated by*. |
+| **Modern design (new default)** | Fluent 2 progress tiles: rounded bars, status icons, a caption per stage (*Done · Current · 12d · Step 3*), soft ring pulse, hover highlight, focus ring. |
+| **Toolbar** | Search (record, process, stage), status filter (*Active / Finished / Aborted / Overdue / No process*), sort (*name, progress, longest in stage*), record & overdue counts, refresh, and clickable **per-stage count chips** that filter the list. |
+| **Overdue flags** | Set *Overdue After (days)*; records past it get an amber badge + left accent, red at twice the threshold. |
+| **Process status** | *Finished* / *Aborted* badges, % complete on every row, aborted processes shown where they stopped (no pulse). |
+| **Open record in…** | New window, same window, or a **modal dialog** (model-driven apps; the list refreshes when the dialog closes). |
+| **Density** | Comfortable or compact rows. |
+| **Polish** | Checkmarks on completed chevrons, gentler pulse animations that respect *reduce motion*, keyboard-accessible stages (no nested interactive controls). |
+
+### How the hover card gets its data
+
+- **Dates / status** come from the BPF instance row the control already loads (`createdon`, `modifiedon`, `completedon`, `activestagestartedon`, `statuscode`) — no extra calls.
+- **Steps** are parsed from `processstage.clientdata`. They come with `RetrieveActivePath` when available; otherwise they're fetched **once per stage, on first hover**, and cached.
+- **Field values** are fetched **once per record, on first hover** (cached for 60s, cleared on Refresh) and only for stages that belong to the row's entity (cross-entity BPF stages show the step list without values).
+- Users only see what their security roles allow; failed lookups degrade silently to "no steps / no values".
+
+### Installing this version
+
+The *Download* links further down point to the upstream 1.0 release. To get 1.1, build the solution from this repository (requires Node 18+ and the .NET SDK):
+
+```bash
+npm install
+npm run build
+npm run solution:build   # -> Solution/bin/Release/Solution.zip
+```
+
+Import `Solution.zip` (or use `pac pcf push --publisher-prefix <prefix>` for a quick dev deploy), then upgrade the control on your grid/subgrid. Version 1.1.0 replaces 1.0.0 in place; the new properties appear in the control's configuration panel.
+
 ## Preview
 
 <p align="center">
@@ -69,7 +107,8 @@
 
 | Style | Description |
 |-------|-------------|
-| `chevron` | Classic BPF ribbon arrows (default) |
+| `modern` | Fluent 2 progress tiles with status icons and captions (default) |
+| `chevron` | Classic BPF ribbon arrows |
 | `circles` | Connected circles with labels |
 | `pills` | Rounded badge style |
 | `segmented` | Single segmented progress bar |
@@ -157,11 +196,16 @@ Multiple BPF definitions can be configured for entities with more than one busin
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `parametersBPF` | String | - | JSON configuration for BPFs |
-| `designStyle` | Enum | `chevron` | Visual design style |
+| `designStyle` | Enum | `modern` | Visual design style |
 | `displayMode` | Enum | `stage` | Show stage or category names |
 | `recordNameSize` | Enum | `medium` | Record name font size (small/medium/large) |
 | `showEntityName` | Enum | `no` | Show entity type badge next to record name |
-| `enableNavigation` | Enum | `yes` | Click row to open record in new tab |
+| `enableNavigation` | Enum | `yes` | Click row to open the record |
+| `navigationTarget` | Enum | `newWindow` | Where the record opens: `newWindow`, `sameWindow`, `dialog` |
+| `enableStageDetails` | Enum | `yes` | Stage details card on hover / keyboard focus |
+| `showToolbar` | Enum | `yes` | Search, filter, sort and per-stage counts above the list |
+| `stageAgeWarningDays` | Whole number | _(empty)_ | Flag records in their current stage for at least N days (red at 2N). Empty/0 disables |
+| `density` | Enum | `comfortable` | Row spacing: `comfortable` or `compact` |
 | `showPulseAnimation` | Enum | `yes` | Subtle animation on active stage |
 | `usePlatformTheme` | Enum | `yes` | Use Dataverse environment theme colors |
 | `completedColor` | String | `#107C10` | Completed stage background color |
@@ -181,7 +225,7 @@ Custom colors are used when `usePlatformTheme` is set to `no`.
 
 | Feature | Description |
 |---------|-------------|
-| **8 Design Styles** | Chevron, Circles, Pills, Segmented, Stepper, Gradient, Line, Fraction |
+| **9 Design Styles** | Modern, Chevron, Circles, Pills, Segmented, Stepper, Gradient, Line, Fraction |
 | **Platform Theming** | Automatically uses Dataverse environment theme colors via Fluent UI v9 tokens |
 | **Custom Colors** | Override completed, active, and inactive stage colors when platform theme is off |
 | **Stage Categories** | Display stage names or localized category names |
@@ -191,7 +235,9 @@ Custom colors are used when `usePlatformTheme` is set to `no`.
 
 | Feature | Description |
 |---------|-------------|
-| **Record Navigation** | Click any row to open the record in a new tab |
+| **Stage Details on Hover** | Status, time in stage, steps & filled fields, process dates for any stage |
+| **Toolbar** | Search, status filter, sort, per-stage count chips, overdue count |
+| **Record Navigation** | Click any row to open the record in a new window, the same window or a dialog |
 | **Pulse Animation** | Subtle animation highlights the currently active stage |
 | **Responsive Layout** | Container-based detection adapts to narrow subgrids and mobile views |
 | **Error Handling** | User-friendly error messages with retry support |
@@ -383,6 +429,22 @@ The CD workflow automatically builds and publishes the solution.
 - The control uses `RetrieveActivePath` to fetch only the active branch stages
 - If this API is unavailable, it falls back to showing all stages
 - Check the console for `RetrieveActivePath failed` warnings
+</details>
+
+<details>
+<summary><strong>Hover card shows no steps or no field values</strong></summary>
+
+- Steps come from `processstage.clientdata`; the user needs read access to *Process Stage*
+- Values are only shown for stages on the row's own entity (cross-entity BPF stages list steps only)
+- The user needs read access to the record's fields (field-level security hides values)
+- Turn off `enableStageDetails` to remove hover cards entirely
+</details>
+
+<details>
+<summary><strong>"In this stage" / overdue badge is missing</strong></summary>
+
+- Requires `activestagestartedon` on the BPF instance (present on OOTB and custom BPF entities)
+- Only shown for *Active* processes; set `stageAgeWarningDays` to enable overdue colouring
 </details>
 
 <details>

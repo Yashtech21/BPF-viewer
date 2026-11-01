@@ -34,7 +34,16 @@ export interface IBPFDefinition {
 // ============================================
 
 /** Visual design style for rendering BPF stages */
-export type DesignStyle = 'chevron' | 'circles' | 'pills' | 'segmented' | 'stepper' | 'gradient' | 'line' | 'fraction';
+export type DesignStyle = 'modern' | 'chevron' | 'circles' | 'pills' | 'segmented' | 'stepper' | 'gradient' | 'line' | 'fraction';
+
+/** Where a record opens when a row is clicked */
+export type NavigationTarget = 'newWindow' | 'sameWindow' | 'dialog';
+
+/** Row spacing preset */
+export type Density = 'comfortable' | 'compact';
+
+/** Lifecycle status of a BPF instance (derived from statuscode) */
+export type ProcessStatus = 'active' | 'finished' | 'aborted' | 'unknown';
 
 /** Whether stage labels show the stage name or the stage category name */
 export type DisplayMode = 'stage' | 'category';
@@ -92,6 +101,30 @@ export interface IBPFStage {
   isActive: boolean;
   /** Whether this stage has been completed */
   isCompleted: boolean;
+  /** Logical name of the entity this stage runs on (cross-entity BPFs), when known */
+  entityName?: string;
+  /**
+   * Steps (fields) defined in the stage, parsed from processstage.clientdata.
+   * Undefined means "not loaded yet" — they are fetched lazily on hover.
+   */
+  steps?: IStageStep[];
+}
+
+/** A single step (data field) inside a BPF stage */
+export interface IStageStep {
+  /** Logical name of the bound attribute, e.g. "budgetamount" (may be empty for non-field steps) */
+  fieldName: string;
+  /** Label shown in the BPF for this step */
+  displayName: string;
+  /** Whether the step is required to move to the next stage */
+  isRequired: boolean;
+}
+
+/** Value of a record attribute as shown in a stage hover card */
+export interface IFieldValue {
+  hasValue: boolean;
+  /** Formatted (display) value when available, otherwise a string form of the raw value */
+  display: string | null;
 }
 
 /**
@@ -113,6 +146,18 @@ export interface IBPFInstance {
   statusCode: number;
   /** Ordered array of stages with computed status */
   stages: IBPFStage[];
+  /** Lifecycle status derived from statusCode */
+  processStatus?: ProcessStatus;
+  /** ISO timestamp the process instance was created (process started) */
+  createdOn?: string | null;
+  /** ISO timestamp the process instance was last modified */
+  modifiedOn?: string | null;
+  /** ISO timestamp the process was finished (only for finished processes) */
+  completedOn?: string | null;
+  /** ISO timestamp the current active stage was entered */
+  activeStageStartedOn?: string | null;
+  /** Display name of the user who last modified the process instance, if returned */
+  modifiedByName?: string | null;
 }
 
 // ============================================
@@ -153,6 +198,24 @@ export interface IControlSettings {
   enableNavigation: boolean;
   showPulseAnimation: boolean;
   usePlatformTheme: boolean;
+  /** Show the rich stage details card when hovering/focusing a stage */
+  enableStageDetails?: boolean;
+  /** Show the search / filter / sort toolbar above the list */
+  showToolbar?: boolean;
+  /** Days in the active stage after which a record is flagged as overdue (null/0 = off) */
+  stageAgeWarningDays?: number | null;
+  /** Where a record opens when clicked */
+  navigationTarget?: NavigationTarget;
+  /** Row spacing */
+  density?: Density;
+}
+
+/** Async loaders used by stage hover cards (provided by the PCF host) */
+export interface IStageDetailsLoaders {
+  /** Resolve the steps for a stage (from clientdata), cached by the service */
+  loadStageSteps?: (stage: IBPFStage) => Promise<IStageStep[]>;
+  /** Load attribute values for a record so step completion can be shown */
+  loadRecordValues?: (entityName: string, recordId: string) => Promise<Map<string, IFieldValue>>;
 }
 
 /** Props for the top-level BPFViewer component (without FluentProvider wrapper) */
@@ -164,12 +227,20 @@ export interface IBPFViewerProps {
   error: string | null;
   onNavigate?: (entityName: string, recordId: string) => void;
   onRefresh?: () => void;
+  /** Loaders for lazily fetched stage details shown in hover cards */
+  loaders?: IStageDetailsLoaders;
+  /** Reference "now" (ms) — injectable for deterministic tests */
+  now?: number;
 }
 
 interface IBPFRowBaseProps {
   record: IRecordBPFData;
   colors: IStageColors;
   isMobile: boolean;
+  /** Reference "now" (ms) used to compute time in stage */
+  now?: number;
+  /** Loaders for lazily fetched stage details shown in hover cards */
+  loaders?: IStageDetailsLoaders;
 }
 
 interface IBPFRowNavigableProps extends IBPFRowBaseProps {
@@ -237,6 +308,10 @@ export interface IProcessStageResponse {
   stagename: string;
   stagecategory: number;
   _processid_value: string;
+  /** JSON definition of the stage (steps/fields) — may be absent depending on the API */
+  clientdata?: string | null;
+  /** Logical name of the entity the stage belongs to */
+  primaryentitytypecode?: string | null;
 }
 
 /** Raw Dataverse response shape for a BPF instance record (index signature for dynamic lookup fields) */
@@ -247,6 +322,10 @@ export interface IBPFInstanceResponse {
   _activestageid_value?: string;
   traversedpath?: string;
   statuscode?: number;
+  createdon?: string;
+  modifiedon?: string;
+  completedon?: string;
+  activestagestartedon?: string;
 }
 
 /** Raw Dataverse response shape for a workflow definition record */

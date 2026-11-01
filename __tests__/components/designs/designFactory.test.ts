@@ -4,6 +4,7 @@
 
 import {
   getDesignComponent,
+  ModernDesign,
   ChevronDesign,
   CircleDesign,
   PillDesign,
@@ -15,6 +16,11 @@ import {
 } from '../../../components/designs';
 
 describe('getDesignComponent', () => {
+  it('returns ModernDesign for "modern" (case-insensitive)', () => {
+    expect(getDesignComponent('modern')).toBe(ModernDesign);
+    expect(getDesignComponent(' Modern ')).toBe(ModernDesign);
+  });
+
   it('returns ChevronDesign for "chevron"', () => {
     const component = getDesignComponent('chevron');
     expect(component).toBe(ChevronDesign);

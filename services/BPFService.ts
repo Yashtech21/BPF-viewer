@@ -24,6 +24,8 @@ import { BPFError, ErrorCodes } from '../utils/errorMessages';
 import { isValidEntityName, isValidFieldName, isValidGuid, escapeODataValue } from '../utils/sanitize';
 import { createLogger } from '../utils/logger';
 import type { PerfTracker } from '../utils/perfTracker';
+import { parseStageSteps, getProcessStatus, toFieldValueMap } from '../utils/stageDetails';
+import type { IStageStep, IFieldValue } from '../types';
 
 const log = createLogger('[BPFService]');
 
@@ -58,6 +60,29 @@ interface AttributeMetadataResponse {
 // Max records per batch (keep it reasonable)
 const BATCH_SIZE = 10;
 
+// Record field values are shown in hover cards; keep them fresher than stage metadata
+const RECORD_VALUES_CACHE_MS = 60 * 1000;
+
+/** Map a processstage response row to an IBPFStage */
+function toStage(stage: IProcessStageResponse, index: number, categoryLabels: Map<number, string>): IBPFStage {
+  const mapped: IBPFStage = {
+    stageId: stage.processstageid,
+    stageName: stage.stagename,
+    stageCategory: stage.stagecategory,
+    stageCategoryName: categoryLabels.get(stage.stagecategory) || stage.stagename,
+    stageOrder: index,
+    isActive: false,
+    isCompleted: false,
+  };
+  if (stage.primaryentitytypecode) {
+    mapped.entityName = stage.primaryentitytypecode;
+  }
+  if (typeof stage.clientdata === 'string') {
+    mapped.steps = parseStageSteps(stage.clientdata);
+  }
+  return mapped;
+}
+
 export class BPFService {
   private webApi: WebApiClient;
   private clientUrl: string;
@@ -67,6 +92,8 @@ export class BPFService {
   private categoryLabelsCache: Map<number, string> | null = null;
   private categoryLabelsCacheTime = 0;
   private activePathCache: Map<string, { stages: IBPFStage[]; timestamp: number }> = new Map();
+  private stageStepsCache: Map<string, Promise<IStageStep[]>> = new Map();
+  private recordValuesCache: Map<string, { promise: Promise<Map<string, IFieldValue>>; timestamp: number }> = new Map();
 
   constructor(webApi: WebApiClient, clientUrl: string = '') {
     this.webApi = webApi;
@@ -305,6 +332,11 @@ export class BPFService {
       || Object.keys(bpfRecord).filter(k => /^[a-z]+_name$/i.test(k)).map(k => bpfRecord[k] as string).find(Boolean)
       || bpfEntityName;
 
+    const str = (key: string): string | null => {
+      const value = bpfRecord[key];
+      return typeof value === 'string' && value ? value : null;
+    };
+
     return {
       processId: bpfRecord.businessprocessflowinstanceid as string || '',
       processName,
@@ -313,6 +345,12 @@ export class BPFService {
       traversedPath,
       statusCode: bpfRecord.statuscode as number || 0,
       stages,
+      processStatus: getProcessStatus(bpfRecord.statuscode as number),
+      createdOn: str('createdon'),
+      modifiedOn: str('modifiedon'),
+      completedOn: str('completedon'),
+      activeStageStartedOn: str('activestagestartedon'),
+      modifiedByName: str('_modifiedby_value@OData.Community.Display.V1.FormattedValue'),
     };
   }
 
@@ -360,15 +398,7 @@ export class BPFService {
       perf?.measure('query:processstage');
 
       const stages: IBPFStage[] = (response.entities as IProcessStageResponse[]).map(
-        (stage, index) => ({
-          stageId: stage.processstageid,
-          stageName: stage.stagename,
-          stageCategory: stage.stagecategory,
-          stageCategoryName: categoryLabels.get(stage.stagecategory) || stage.stagename,
-          stageOrder: index,
-          isActive: false,
-          isCompleted: false,
-        })
+        (stage, index) => toStage(stage, index, categoryLabels)
       );
 
       // Cache the results
@@ -569,15 +599,7 @@ export class BPFService {
 
       const data = await response.json();
       const stages: IBPFStage[] = ((data.value || []) as IProcessStageResponse[]).map(
-        (stage, index) => ({
-          stageId: stage.processstageid,
-          stageName: stage.stagename,
-          stageCategory: stage.stagecategory,
-          stageCategoryName: categoryLabels.get(stage.stagecategory) || stage.stagename,
-          stageOrder: index,
-          isActive: false,
-          isCompleted: false,
-        })
+        (stage, index) => toStage(stage, index, categoryLabels)
       );
 
       // Cache the result
@@ -666,9 +688,73 @@ export class BPFService {
   }
 
   /**
+   * Resolve the steps (fields) of a stage for the hover card.
+   * Uses steps parsed from clientdata when the stage already carries them,
+   * otherwise fetches processstage.clientdata once per stage (cached).
+   */
+  public getStageSteps(stage: IBPFStage): Promise<IStageStep[]> {
+    if (stage.steps) {
+      return Promise.resolve(stage.steps);
+    }
+    if (!isValidGuid(stage.stageId)) {
+      return Promise.resolve([]);
+    }
+
+    const cached = this.stageStepsCache.get(stage.stageId);
+    if (cached) return cached;
+
+    const request = this.fetchWithTimeout(
+      this.webApi.retrieveRecord('processstage', stage.stageId, '?$select=clientdata,primaryentitytypecode'),
+      REQUEST_TIMEOUT_MS
+    )
+      .then(entity => parseStageSteps((entity as IProcessStageResponse).clientdata))
+      .catch(error => {
+        log.warn(`Failed to load steps for stage ${stage.stageId}:`, error);
+        // Don't cache failures — allow a retry on next hover
+        this.stageStepsCache.delete(stage.stageId);
+        return [] as IStageStep[];
+      });
+
+    this.stageStepsCache.set(stage.stageId, request);
+    return request;
+  }
+
+  /**
+   * Load a record's attribute values so the hover card can show which
+   * stage fields are filled in. Cached briefly per record.
+   */
+  public getRecordValues(entityName: string, recordId: string): Promise<Map<string, IFieldValue>> {
+    if (!isValidEntityName(entityName) || !isValidGuid(recordId)) {
+      return Promise.resolve(new Map());
+    }
+
+    const key = `${entityName}:${recordId}`;
+    const cached = this.recordValuesCache.get(key);
+    if (cached && Date.now() - cached.timestamp < RECORD_VALUES_CACHE_MS) {
+      return cached.promise;
+    }
+
+    const promise = this.fetchWithTimeout(
+      this.webApi.retrieveRecord(entityName, recordId),
+      REQUEST_TIMEOUT_MS
+    )
+      .then(entity => toFieldValueMap(entity as Record<string, unknown>) as Map<string, IFieldValue>)
+      .catch(error => {
+        log.warn(`Failed to load values for ${entityName} ${recordId}:`, error);
+        this.recordValuesCache.delete(key);
+        return new Map<string, IFieldValue>();
+      });
+
+    this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
+    return promise;
+  }
+
+  /**
    * Clear all caches
    */
   public clearCache(): void {
+    this.stageStepsCache.clear();
+    this.recordValuesCache.clear();
     this.stageCache.clear();
     this.workflowCache.clear();
     this.pendingRequests.clear();

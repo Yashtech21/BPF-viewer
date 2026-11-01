@@ -11,7 +11,8 @@ import * as React from 'react';
 import { makeStyles, mergeClasses } from '@fluentui/react-components';
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
-import { TRANSITION_DURATION, PULSE_DURATION } from './designConstants';
+import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { TRANSITION_DURATION, PULSE_DURATION, PULSE_GLOW_KEYFRAMES, REDUCED_MOTION } from './designConstants';
 
 const useSegmentedStyles = makeStyles({
   container: {
@@ -49,12 +50,10 @@ const useSegmentedStyles = makeStyles({
     paddingLeft: '4px',
   },
   pulse: {
-    animationName: {
-      '0%, 100%': { opacity: 1 },
-      '50%': { opacity: 0.7 },
-    },
+    animationName: PULSE_GLOW_KEYFRAMES,
     animationDuration: PULSE_DURATION,
     animationIterationCount: 'infinite',
+    ...REDUCED_MOTION,
   },
 });
 
@@ -74,8 +73,8 @@ const SegmentedBarDesignComponent: React.FC<IBPFDesignProps> = ({
         const isLast = index === stageMetadata.length - 1;
 
         return (
+          <StageHoverCard key={stage.stageId} stage={stage} status={status} index={index} total={stageMetadata.length}>
           <div
-            key={stage.stageId}
             className={mergeClasses(
               styles.segment,
               isLast && styles.segmentLast,
@@ -90,6 +89,7 @@ const SegmentedBarDesignComponent: React.FC<IBPFDesignProps> = ({
           >
             <span className={styles.label}>{label}</span>
           </div>
+          </StageHoverCard>
         );
       })}
     </div>

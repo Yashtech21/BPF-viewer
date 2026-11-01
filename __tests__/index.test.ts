@@ -813,6 +813,55 @@ describe('BusinessProcessFlowViewer', () => {
       });
     });
 
+    it('opens in the same window when navigationTarget is sameWindow', () => {
+      (context.parameters as unknown as Record<string, unknown>).navigationTarget = { raw: 'sameWindow' };
+      control.init(context, notifyOutputChanged);
+      const element = control.updateView(context);
+
+      element.props.onNavigate('opportunity', '00000000-0000-0000-0000-000000000001');
+
+      expect(context.navigation.openForm).toHaveBeenCalledWith(
+        expect.objectContaining({ openInNewWindow: false })
+      );
+    });
+
+    it('opens a modal dialog via Xrm.Navigation.navigateTo and refreshes on close', async () => {
+      (context.parameters as unknown as Record<string, unknown>).navigationTarget = { raw: 'dialog' };
+      const navigateTo = jest.fn().mockResolvedValue(undefined);
+      const g = globalThis as unknown as { Xrm?: unknown };
+      const previousXrm = g.Xrm;
+      g.Xrm = { Navigation: { navigateTo } };
+      try {
+        control.init(context, notifyOutputChanged);
+        const element = control.updateView(context);
+
+        element.props.onNavigate('opportunity', '00000000-0000-0000-0000-000000000001');
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(navigateTo).toHaveBeenCalledWith(
+          { pageType: 'entityrecord', entityName: 'opportunity', entityId: '00000000-0000-0000-0000-000000000001' },
+          expect.objectContaining({ target: 2 })
+        );
+        expect(context.navigation.openForm).not.toHaveBeenCalled();
+        expect(context.parameters.records.refresh).toHaveBeenCalled();
+      } finally {
+        g.Xrm = previousXrm;
+      }
+    });
+
+    it('falls back to openForm when dialog navigation is unavailable', () => {
+      (context.parameters as unknown as Record<string, unknown>).navigationTarget = { raw: 'dialog' };
+      control.init(context, notifyOutputChanged);
+      const element = control.updateView(context);
+
+      element.props.onNavigate('opportunity', '00000000-0000-0000-0000-000000000001');
+
+      expect(context.navigation.openForm).toHaveBeenCalledWith(
+        expect.objectContaining({ openInNewWindow: true })
+      );
+    });
+
     it('rejects invalid entity name', () => {
       control.init(context, notifyOutputChanged);
       const element = control.updateView(context);
@@ -977,12 +1026,44 @@ describe('BusinessProcessFlowViewer', () => {
       control.init(context, notifyOutputChanged);
       const element = control.updateView(context);
 
-      expect(element.props.settings.designStyle).toBe('chevron');
+      expect(element.props.settings.designStyle).toBe('modern');
       expect(element.props.settings.displayMode).toBe('stage');
       expect(element.props.settings.recordNameSize).toBe('medium');
       expect(element.props.settings.showEntityName).toBe(false);
       expect(element.props.settings.enableNavigation).toBe(false);
       expect(element.props.settings.showPulseAnimation).toBe(false);
+      // v1.1 properties missing on forms configured with v1.0 fall back to defaults
+      expect(element.props.settings.enableStageDetails).toBe(true);
+      expect(element.props.settings.showToolbar).toBe(true);
+      expect(element.props.settings.stageAgeWarningDays).toBeNull();
+      expect(element.props.settings.navigationTarget).toBe('newWindow');
+      expect(element.props.settings.density).toBe('comfortable');
+    });
+
+    it('reads v1.1 settings', () => {
+      const params = context.parameters as unknown as Record<string, unknown>;
+      params.enableStageDetails = { raw: 'no' };
+      params.showToolbar = { raw: 'no' };
+      params.stageAgeWarningDays = { raw: 7 };
+      params.navigationTarget = { raw: 'dialog' };
+      params.density = { raw: 'compact' };
+
+      control.init(context, notifyOutputChanged);
+      const element = control.updateView(context);
+
+      expect(element.props.settings.enableStageDetails).toBe(false);
+      expect(element.props.settings.showToolbar).toBe(false);
+      expect(element.props.settings.stageAgeWarningDays).toBe(7);
+      expect(element.props.settings.navigationTarget).toBe('dialog');
+      expect(element.props.settings.density).toBe('compact');
+      expect(typeof element.props.loaders.loadStageSteps).toBe('function');
+      expect(typeof element.props.loaders.loadRecordValues).toBe('function');
+    });
+
+    it('ignores non-positive overdue thresholds', () => {
+      (context.parameters as unknown as Record<string, unknown>).stageAgeWarningDays = { raw: 0 };
+      control.init(context, notifyOutputChanged);
+      expect(control.updateView(context).props.settings.stageAgeWarningDays).toBeNull();
     });
   });
 

@@ -223,4 +223,52 @@
   <data name="No" xml:space="preserve">
     <value>No</value>
   </data>
+  <data name="DesignModern" xml:space="preserve">
+    <value>Modern (Fluent 2)</value>
+  </data>
+  <data name="EnableStageDetails" xml:space="preserve">
+    <value>Stage Details on Hover</value>
+  </data>
+  <data name="EnableStageDetails_Desc" xml:space="preserve">
+    <value>Show a details card (status, time in stage, steps and filled fields, process dates) when hovering or focusing a stage</value>
+  </data>
+  <data name="ShowToolbar" xml:space="preserve">
+    <value>Show Toolbar</value>
+  </data>
+  <data name="ShowToolbar_Desc" xml:space="preserve">
+    <value>Show search, status filter, sort and a per-stage record count above the list</value>
+  </data>
+  <data name="StageAgeWarningDays" xml:space="preserve">
+    <value>Overdue After (days)</value>
+  </data>
+  <data name="StageAgeWarningDays_Desc" xml:space="preserve">
+    <value>Flag records that have been in their current stage for at least this many days (red at twice the value). Leave empty to disable.</value>
+  </data>
+  <data name="NavigationTarget" xml:space="preserve">
+    <value>Open Record In</value>
+  </data>
+  <data name="NavigationTarget_Desc" xml:space="preserve">
+    <value>Where the record opens when a row is clicked</value>
+  </data>
+  <data name="NavNewWindow" xml:space="preserve">
+    <value>New window</value>
+  </data>
+  <data name="NavSameWindow" xml:space="preserve">
+    <value>Same window</value>
+  </data>
+  <data name="NavDialog" xml:space="preserve">
+    <value>Dialog (model-driven apps)</value>
+  </data>
+  <data name="Density" xml:space="preserve">
+    <value>Density</value>
+  </data>
+  <data name="Density_Desc" xml:space="preserve">
+    <value>Row spacing</value>
+  </data>
+  <data name="DensityComfortable" xml:space="preserve">
+    <value>Comfortable</value>
+  </data>
+  <data name="DensityCompact" xml:space="preserve">
+    <value>Compact</value>
+  </data>
 </root>
