@@ -1,5 +1,5 @@
 /**
- * BusinessProcessFlowViewer
+ * BPFViewerPlus (fork of BusinessProcessFlowViewer by Allan De Castro)
  *
  * Virtual PCF Control with optimized Dataverse calls
  *
@@ -33,8 +33,12 @@ import { validateBPFConfiguration } from './utils/configValidation';
 import { isValidEntityName, isValidGuid, isValidHexColor } from './utils/sanitize';
 import { logger } from './utils/logger';
 import { createPerfTracker } from './utils/perfTracker';
+import { runQueue } from './utils/taskQueue';
 
-export class BusinessProcessFlowViewer implements ComponentFramework.ReactControl<IInputs, IOutputs> {
+/** How many records are fetched in parallel (1 = strictly one at a time) */
+const BPF_FETCH_CONCURRENCY = 1;
+
+export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, IOutputs> {
   private context: ComponentFramework.Context<IInputs>;
   private notifyOutputChanged: () => void;
   private bpfService: BPFService | null = null;
@@ -245,7 +249,8 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
   }
 
   /**
-   * OPTIMIZED: Process dataset and fetch BPF data in batches
+   * Process the dataset: render all rows immediately, then load BPF data
+   * record by record through a small queue so each row fills in as it arrives.
    */
   private async processDataset(
     dataset: ComponentFramework.PropertyTypes.DataSet
@@ -288,23 +293,17 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
       }
     }
 
-    // OPTIMIZED: Start BPF fetch and entity display name resolution in parallel
-    // Both are independent async operations that hit Dataverse
-    perf.mark('getBPFDataForRecords');
-    const bpfDataPromise = newRecordIds.length > 0
-      ? this.bpfService.getBPFDataForRecords(
-          newRecordIds,
-          this.bpfConfig,
-          this.abortController.signal,
-          perf
-        )
-      : Promise.resolve(new Map<string, import('./types').IBPFInstance | null>());
-
     perf.mark('getEntityDisplayName', this.entityDisplayNameCache.has(entityName));
     const entityDisplayName = await this.getEntityDisplayName(entityName);
     perf.measure('getEntityDisplayName');
 
-    // Now build the initial records with display name
+    // A newer dataset may have arrived while the display name resolved
+    if (currentGeneration !== this.requestGeneration) {
+      return;
+    }
+
+    // Build the full row list first: cached rows keep their data, new rows
+    // render immediately with a per-row loading state.
     const updatedRecords: IRecordBPFData[] = [];
 
     for (const recordId of recordIds) {
@@ -332,64 +331,54 @@ export class BusinessProcessFlowViewer implements ComponentFramework.ReactContro
 
     this.records = updatedRecords;
     this.isLoading = newRecordIds.length > 0;
+    this.notifyOutputChanged();
 
-    // Await the BPF data (already in-flight since earlier)
-    if (newRecordIds.length > 0) {
-      const newRecordIdSet = new Set(newRecordIds);
+    if (newRecordIds.length === 0) {
+      perf.summary();
+      return;
+    }
 
-      try {
-        const bpfData = await bpfDataPromise;
-        perf.measure('getBPFDataForRecords');
+    // Fetch BPF data one record at a time; each row updates as soon as its
+    // own data arrives.
+    const signal = this.abortController.signal;
+    const config = this.bpfConfig;
+    const service = this.bpfService;
+    const isStale = () => signal.aborted || currentGeneration !== this.requestGeneration;
 
-        // Discard stale results if a newer request has started
-        if (currentGeneration !== this.requestGeneration) {
-          return;
+    perf.mark('getBPFDataForRecord (queue)');
+    await runQueue(
+      newRecordIds,
+      BPF_FETCH_CONCURRENCY,
+      async (recordId) => {
+        let update: Partial<IRecordBPFData>;
+        try {
+          const bpfInstance = await service.getBPFDataForRecord(recordId, entityName, config, { throwOnError: true });
+          if (isStale()) return;
+          this.fetchedRecordIds.add(recordId);
+          update = { bpfInstance, isLoading: false, error: null };
+        } catch (e) {
+          if (isStale()) return;
+          logger.error(`Failed to fetch BPF data for record ${recordId}:`, e);
+          // Not cached in fetchedRecordIds, so a refresh retries this row
+          update = { bpfInstance: null, isLoading: false, error: getErrorMessage(e) };
         }
 
-        // Update records with fetched data
-        this.records = this.records.map(record => {
-          if (newRecordIdSet.has(record.recordId)) {
-            this.fetchedRecordIds.add(record.recordId);
-            return {
-              ...record,
-              bpfInstance: bpfData.get(record.recordId) || null,
-              isLoading: false,
-            };
-          }
-          return record;
-        });
+        this.records = this.records.map(row => (row.recordId === recordId ? { ...row, ...update } : row));
+        this.notifyOutputChanged();
+      },
+      isStale
+    );
+    perf.measure('getBPFDataForRecord (queue)');
 
-      } catch (e) {
-        perf.measure('getBPFDataForRecords');
-
-        // Discard stale errors if a newer request has started
-        if (currentGeneration !== this.requestGeneration) {
-          return;
-        }
-
-        logger.error('Failed to fetch BPF data:', e);
-
-        // Get user-friendly error message
-        const errorMessage = getErrorMessage(e);
-
-        // Mark records as errored
-        this.records = this.records.map(record => {
-          if (newRecordIdSet.has(record.recordId)) {
-            return {
-              ...record,
-              isLoading: false,
-              error: errorMessage,
-            };
-          }
-          return record;
-        });
-      }
+    // Only the current generation may clear the global loading flag
+    if (isStale()) {
+      return;
     }
 
     this.isLoading = false;
     perf.summary();
 
-    // Trigger framework to call updateView with updated records
+    // Final render with the global loading flag cleared
     this.notifyOutputChanged();
   }
 

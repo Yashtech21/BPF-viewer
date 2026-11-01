@@ -55,6 +55,7 @@
 | **Process status** | *Finished* / *Aborted* badges, % complete on every row, aborted processes shown where they stopped (no pulse). |
 | **Open record in…** | New window, same window, or a **modal dialog** (model-driven apps; the list refreshes when the dialog closes). |
 | **Density** | Comfortable or compact rows. |
+| **Progressive loading** | Rows appear immediately and each fills in as soon as its own BPF data arrives (one record at a time); a failing record shows its own error without blocking the rest. |
 | **Polish** | Checkmarks on completed chevrons, gentler pulse animations that respect *reduce motion*, keyboard-accessible stages (no nested interactive controls). |
 
 ### How the hover card gets its data
@@ -74,7 +75,18 @@ npm run build
 npm run solution:build   # -> Solution/bin/Release/Solution.zip
 ```
 
-Import `Solution.zip` (or use `pac pcf push --publisher-prefix <prefix>` for a quick dev deploy), then upgrade the control on your grid/subgrid. Version 1.1.0 replaces 1.0.0 in place; the new properties appear in the control's configuration panel.
+Import `Solution.zip` (or `pac pcf push --publisher-prefix iws` for a quick dev deploy).
+
+This fork ships under its **own identity** so it installs **side by side** with the managed upstream v1.0.0:
+
+| | Upstream 1.0.0 | This fork |
+|---|---|---|
+| Control | `ADC.BusinessProcessFlowViewer` | `IWS.BPFViewerPlus` |
+| Display name | Business Process Flow Viewer | **BPF Viewer Plus** |
+| Solution | `BusinessProcessFlowViewer` | `BPFViewerPlus` |
+| Publisher / prefix | `AllanDeCastro` / `adc` | `IWSPublisher` / `iws` |
+
+Because it's a different control, existing grids keep using v1.0.0 until you switch them to *BPF Viewer Plus* in the grid's component settings (the configuration JSON is the same).
 
 ## Preview
 

@@ -90,9 +90,9 @@ jobs:
         run: |
           # MSBuild Solution targets expect each control in its own subdirectory
           $src = "out/controls"
-          $dest = "$src/BusinessProcessFlowViewer"
+          $dest = "$src/BPFViewerPlus"
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
-          Get-ChildItem $src -Exclude "BusinessProcessFlowViewer" | Move-Item -Destination $dest
+          Get-ChildItem $src -Exclude "BPFViewerPlus" | Move-Item -Destination $dest
 
       - name: Restore Solution NuGet packages
         run: dotnet restore Solution/Solution.cdsproj
@@ -105,10 +105,10 @@ jobs:
           $version = "${{ steps.version.outputs.VERSION }}"
           $releaseDir = "Solution/bin/Release"
           Get-ChildItem "$releaseDir/*_managed.zip" | ForEach-Object {
-            Rename-Item $_.FullName "BusinessProcessFlowViewer_${version}_managed.zip"
+            Rename-Item $_.FullName "BPFViewerPlus_${version}_managed.zip"
           }
           Get-ChildItem "$releaseDir/*.zip" -Exclude "*_managed.zip","*_${version}_*" | ForEach-Object {
-            Rename-Item $_.FullName "BusinessProcessFlowViewer_${version}.zip"
+            Rename-Item $_.FullName "BPFViewerPlus_${version}.zip"
           }
           echo "Solution artifacts:"
           Get-ChildItem "$releaseDir/*.zip" | ForEach-Object { echo "  $($_.Name)" }
@@ -117,14 +117,14 @@ jobs:
       - name: Upload managed solution artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BusinessProcessFlowViewer-v${{ steps.version.outputs.VERSION }}-managed
+          name: BPFViewerPlus-v${{ steps.version.outputs.VERSION }}-managed
           path: Solution/bin/Release/*_managed.zip
           retention-days: 90
 
       - name: Upload unmanaged solution artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BusinessProcessFlowViewer-v${{ steps.version.outputs.VERSION }}-unmanaged
+          name: BPFViewerPlus-v${{ steps.version.outputs.VERSION }}-unmanaged
           path: |
             Solution/bin/Release/*.zip
             !Solution/bin/Release/*_managed.zip

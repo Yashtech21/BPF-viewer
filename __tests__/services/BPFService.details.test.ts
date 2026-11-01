@@ -118,6 +118,35 @@ describe('BPFService stage details', () => {
     });
   });
 
+  describe('getBPFDataForRecord throwOnError', () => {
+    it('keeps the lenient default: errors resolve to null', async () => {
+      webApi.retrieveMultipleRecords.mockRejectedValue(new Error('API Error'));
+      await expect(service.getBPFDataForRecord(RECORD_ID, 'opportunity', config)).resolves.toBeNull();
+    });
+
+    it('rethrows when every BPF definition failed', async () => {
+      webApi.retrieveMultipleRecords.mockRejectedValue(new Error('API Error'));
+      await expect(
+        service.getBPFDataForRecord(RECORD_ID, 'opportunity', config, { throwOnError: true })
+      ).rejects.toThrow('API Error');
+    });
+
+    it('returns null (no throw) when one definition succeeded without a match', async () => {
+      const twoBpfs: IBPFConfiguration = {
+        bpfs: [
+          { bpfEntitySchemaName: 'opportunitysalesprocess', lookupFieldSchemaName: '_opportunityid_value' },
+          { bpfEntitySchemaName: 'leadtoopportunitysalesprocess', lookupFieldSchemaName: '_opportunityid_value' },
+        ],
+      };
+      webApi.retrieveMultipleRecords
+        .mockRejectedValueOnce(new Error('No privilege'))
+        .mockResolvedValueOnce({ entities: [] });
+      await expect(
+        service.getBPFDataForRecord(RECORD_ID, 'opportunity', twoBpfs, { throwOnError: true })
+      ).resolves.toBeNull();
+    });
+  });
+
   describe('getStageSteps', () => {
     it('returns steps already on the stage without a request', async () => {
       const steps = [{ fieldName: 'name', displayName: 'Topic', isRequired: true }];

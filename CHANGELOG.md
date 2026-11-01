@@ -30,6 +30,15 @@ Existing configurations keep working: new properties default sensibly when absen
 
 ### Changed
 
+- **New control identity** so it can be installed beside the managed upstream v1.0.0:
+  namespace `IWS`, constructor `BPFViewerPlus`, solution `BPFViewerPlus`, publisher `IWSPublisher` (prefix `iws`).
+  Project file and strings renamed to `BPFViewerPlus.pcfproj` / `strings/BPFViewerPlus.1033.resx`.
+- **Per-record loading**: all rows render immediately with a loading state, then BPF data is fetched one
+  record at a time (queue, concurrency 1) and each row updates as soon as its data arrives. A failure marks
+  only that row (and it is retried on the next refresh); the global loading flag clears when the queue drains.
+  Stale queues stop when the view changes or the control is destroyed.
+- `BPFService.getBPFDataForRecord` accepts `{ throwOnError: true }` to surface failures instead of returning null
+  (default behaviour unchanged).
 - Pulse animation is now a soft ring/glow instead of an opacity blink, and is disabled under *prefers-reduced-motion*.
 - Completed chevrons show a checkmark.
 - Aborted processes no longer pulse and are rendered as stopped.

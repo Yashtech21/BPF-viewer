@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ImportExportXml version="9.2.22124.199" SolutionPackageVersion="9.2" languagecode="1033" generatedBy="CrmLive" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <SolutionManifest>
-    <UniqueName>BusinessProcessFlowViewer</UniqueName>
+    <UniqueName>BPFViewerPlus</UniqueName>
     <LocalizedNames>
-      <LocalizedName description="Business Process Flow Viewer" languagecode="1033" />
+      <LocalizedName description="BPF Viewer Plus" languagecode="1033" />
     </LocalizedNames>
     <Descriptions>
       <Description description="A modern PCF control that displays Business Process Flow stages in grid and subgrid views." languagecode="1033" />
@@ -11,16 +11,16 @@
     <Version>1.1.0</Version>
     <Managed>2</Managed>
     <Publisher>
-      <UniqueName>AllanDeCastro</UniqueName>
+      <UniqueName>IWSPublisher</UniqueName>
       <LocalizedNames>
-        <LocalizedName description="Allan De Castro" languagecode="1033" />
+        <LocalizedName description="IWS" languagecode="1033" />
       </LocalizedNames>
       <Descriptions>
         <Description description="" languagecode="1033" />
       </Descriptions>
       <EMailAddress xsi:nil="true" />
       <SupportingWebsiteUrl xsi:nil="true" />
-      <CustomizationPrefix>adc</CustomizationPrefix>
+      <CustomizationPrefix>iws</CustomizationPrefix>
       <CustomizationOptionValuePrefix>10000</CustomizationOptionValuePrefix>
       <Addresses>
         <Address>

@@ -60,11 +60,11 @@
   </resheader>
 
   <!-- Control Name & Description -->
-  <data name="BusinessProcessFlowViewer" xml:space="preserve">
-    <value>Business Process Flow Viewer</value>
+  <data name="BPFViewerPlus" xml:space="preserve">
+    <value>BPF Viewer Plus</value>
     <comment>Control display name</comment>
   </data>
-  <data name="BusinessProcessFlowViewer_Desc" xml:space="preserve">
+  <data name="BPFViewerPlus_Desc" xml:space="preserve">
     <value>Displays business process flow stages for records in a grid or subgrid view.</value>
     <comment>Control description</comment>
   </data>

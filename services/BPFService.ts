@@ -617,16 +617,19 @@ export class BPFService {
   public async getBPFDataForRecord(
     recordId: string,
     entityName: string,
-    config: IBPFConfiguration
+    config: IBPFConfiguration,
+    options: { throwOnError?: boolean } = {}
   ): Promise<IBPFInstance | null> {
+    const throwOnError = options.throwOnError === true;
+
     // Check if already fetching this record
-    const pendingKey = `${entityName}_${recordId}`;
+    const pendingKey = `${entityName}_${recordId}_${throwOnError ? 'strict' : 'lenient'}`;
     if (this.pendingRequests.has(pendingKey)) {
       return this.pendingRequests.get(pendingKey)!;
     }
 
     // Create the request
-    const request = this.fetchSingleRecord(recordId, config);
+    const request = this.fetchSingleRecord(recordId, config, throwOnError);
     this.pendingRequests.set(pendingKey, request);
 
     try {
@@ -642,18 +645,30 @@ export class BPFService {
    */
   private async fetchSingleRecord(
     recordId: string,
-    config: IBPFConfiguration
+    config: IBPFConfiguration,
+    throwOnError = false
   ): Promise<IBPFInstance | null> {
+    let lastError: unknown = null;
+    let anySucceeded = false;
+
     for (const bpfDef of config.bpfs) {
       try {
         const results = await this.fetchBPFInstancesBatched([recordId], bpfDef);
+        anySucceeded = true;
         const instance = results.get(recordId);
         if (instance) {
           return instance;
         }
       } catch (error) {
+        lastError = error;
         log.warn(`Error fetching single record:`, error);
       }
+    }
+
+    // Strict mode: surface the failure only when no BPF definition could be
+    // queried at all (a clean "not found" in any definition still means null).
+    if (throwOnError && !anySucceeded && lastError) {
+      throw lastError;
     }
     return null;
   }

@@ -1,9 +1,9 @@
 /**
- * Tests for BusinessProcessFlowViewer (index.ts) - PCF Control Entry Point
+ * Tests for BPFViewerPlus (index.ts) - PCF Control Entry Point
  */
 
 import * as React from 'react';
-import { BusinessProcessFlowViewer } from '../index';
+import { BPFViewerPlus } from '../index';
 import { BPFService } from '../services/BPFService';
 import type { IInputs } from '../generated/ManifestTypes';
 
@@ -109,13 +109,13 @@ function createControlContext(overrides?: Partial<Record<string, unknown>>): Com
   } as unknown as ComponentFramework.Context<IInputs>;
 }
 
-describe('BusinessProcessFlowViewer', () => {
-  let control: BusinessProcessFlowViewer;
+describe('BPFViewerPlus', () => {
+  let control: BPFViewerPlus;
   let context: ComponentFramework.Context<IInputs>;
   const notifyOutputChanged = jest.fn();
 
   beforeEach(() => {
-    control = new BusinessProcessFlowViewer();
+    control = new BPFViewerPlus();
     context = createControlContext();
     jest.clearAllMocks();
   });
@@ -373,8 +373,8 @@ describe('BusinessProcessFlowViewer', () => {
         }),
       };
 
-      // Mock getBPFDataForRecords to reject (triggers processDataset catch block)
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
+      // Mock getBPFDataForRecord to reject (triggers processDataset catch block)
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
         .mockRejectedValue(new Error('Network error'));
 
       const datasetCtx = {
@@ -418,17 +418,17 @@ describe('BusinessProcessFlowViewer', () => {
         }),
       });
 
-      // First getBPFDataForRecords call: slow (never resolves until we resolve it)
+      // First getBPFDataForRecord call: slow (never resolves until we resolve it)
       // Second call: fast
-      let resolveFirst!: (value: Map<string, null>) => void;
+      let resolveFirst!: (value: null) => void;
       let callCount = 0;
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
         .mockImplementation(() => {
           callCount++;
           if (callCount === 1) {
-            return new Promise<Map<string, null>>(resolve => { resolveFirst = resolve; });
+            return new Promise<null>(resolve => { resolveFirst = resolve; });
           }
-          return Promise.resolve(new Map());
+          return Promise.resolve(null);
         });
 
       // First dataset with record1
@@ -475,7 +475,7 @@ describe('BusinessProcessFlowViewer', () => {
       await new Promise(resolve => setTimeout(resolve, 20));
 
       // Resolve the first request (should be discarded as stale since generation moved on)
-      resolveFirst(new Map());
+      resolveFirst(null);
 
       await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -502,13 +502,13 @@ describe('BusinessProcessFlowViewer', () => {
       // First call: slow rejection. Second call: fast success.
       let rejectFirst!: (error: Error) => void;
       let callCount = 0;
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
         .mockImplementation(() => {
           callCount++;
           if (callCount === 1) {
-            return new Promise<Map<string, null>>((_resolve, reject) => { rejectFirst = reject; });
+            return new Promise<null>((_resolve, reject) => { rejectFirst = reject; });
           }
-          return Promise.resolve(new Map());
+          return Promise.resolve(null);
         });
 
       const ctx1 = {
@@ -580,8 +580,8 @@ describe('BusinessProcessFlowViewer', () => {
       });
 
       // First call succeeds for record1, second call for record2
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
-        .mockResolvedValue(new Map());
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
+        .mockResolvedValue(null);
 
       // First dataset: record1 only
       const ctx1 = {
@@ -642,10 +642,10 @@ describe('BusinessProcessFlowViewer', () => {
         }),
       });
 
-      const spy = jest.spyOn(BPFService.prototype, 'getBPFDataForRecords');
+      const spy = jest.spyOn(BPFService.prototype, 'getBPFDataForRecord');
 
       // First call succeeds for record1
-      spy.mockResolvedValueOnce(new Map());
+      spy.mockResolvedValueOnce(null);
 
       const ctx1 = {
         ...context,
@@ -705,8 +705,8 @@ describe('BusinessProcessFlowViewer', () => {
         getNamedReference: undefined,
       };
 
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
-        .mockResolvedValue(new Map());
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
+        .mockResolvedValue(null);
 
       // Lookup field with pattern that matches /_(.+)id_value/ while passing validation
       // (starts with letter, so isValidEntityName accepts it)
@@ -728,7 +728,7 @@ describe('BusinessProcessFlowViewer', () => {
         },
       } as unknown as ComponentFramework.Context<IInputs>;
 
-      const ctrl = new BusinessProcessFlowViewer();
+      const ctrl = new BPFViewerPlus();
       ctrl.init(configCtx, notifyOutputChanged);
       ctrl.updateView(configCtx);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -748,8 +748,8 @@ describe('BusinessProcessFlowViewer', () => {
         getNamedReference: undefined,
       };
 
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
-        .mockResolvedValue(new Map());
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
+        .mockResolvedValue(null);
 
       // Lookup field that won't match /_(.+)id_value/ regex
       const configCtx = {
@@ -770,7 +770,7 @@ describe('BusinessProcessFlowViewer', () => {
         },
       } as unknown as ComponentFramework.Context<IInputs>;
 
-      const ctrl = new BusinessProcessFlowViewer();
+      const ctrl = new BPFViewerPlus();
       ctrl.init(configCtx, notifyOutputChanged);
       ctrl.updateView(configCtx);
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -778,6 +778,192 @@ describe('BusinessProcessFlowViewer', () => {
       const element = ctrl.updateView(configCtx);
       expect(element.props.records.length).toBeGreaterThan(0);
       expect(element.props.records[0].entityName).toBe('unknown');
+    });
+
+    describe('incremental per-record loading', () => {
+      const ids = [
+        '00000000-0000-0000-0000-000000000001',
+        '00000000-0000-0000-0000-000000000002',
+        '00000000-0000-0000-0000-000000000003',
+      ];
+
+      const mockRecord = (id: string, name: string) => ({
+        getRecordId: () => id,
+        getValue: jest.fn().mockReturnValue(name),
+        getFormattedValue: jest.fn().mockReturnValue(name),
+        getNamedReference: jest.fn().mockReturnValue({ id, name, entityType: 'opportunity' }),
+      });
+
+      const ctxFor = (recordIds: string[]) =>
+        ({
+          ...context,
+          parameters: {
+            ...context.parameters,
+            records: {
+              ...context.parameters.records,
+              sortedRecordIds: recordIds,
+              records: Object.fromEntries(recordIds.map((id, i) => [id, mockRecord(id, `Record ${i + 1}`)])),
+              loading: false,
+              columns: [{ name: 'name', isPrimary: true }],
+            },
+          },
+        }) as unknown as ComponentFramework.Context<IInputs>;
+
+      const instanceFor = (id: string) => ({
+        processId: `bpf-${id.slice(-1)}`,
+        processName: 'Opportunity Sales Process',
+        bpfEntityName: 'opportunitysalesprocess',
+        activeStageId: 's1',
+        traversedPath: '',
+        statusCode: 1,
+        stages: [],
+      });
+
+      /** Lets queued promise callbacks run */
+      const flush = async () => {
+        for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0));
+      };
+
+      /** Spy that hands back a controllable promise per call */
+      function deferredSpy() {
+        const pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+        const spy = jest.spyOn(BPFService.prototype, 'getBPFDataForRecord').mockImplementation(
+          (recordId: string) =>
+            new Promise((resolve, reject) => {
+              pending.set(recordId, { resolve: resolve as (v: unknown) => void, reject });
+            }) as ReturnType<BPFService['getBPFDataForRecord']>
+        );
+        return { spy, pending };
+      }
+
+      const rows = (ctx: ComponentFramework.Context<IInputs>) =>
+        control.updateView(ctx).props.records as Array<{ recordId: string; isLoading: boolean; error: string | null; bpfInstance: unknown }>;
+
+      it('renders every row as loading first, then fetches one record at a time', async () => {
+        const { spy, pending } = deferredSpy();
+        const ctx = ctxFor(ids);
+
+        control.updateView(ctx);
+        await flush();
+
+        // All rows exist and are loading before any BPF data arrives
+        const initial = rows(ctx);
+        expect(initial.map(r => r.recordId)).toEqual(ids);
+        expect(initial.every(r => r.isLoading)).toBe(true);
+        expect(notifyOutputChanged).toHaveBeenCalled();
+
+        // Concurrency 1: only the first record has been requested
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith(ids[0], 'opportunity', expect.anything(), { throwOnError: true });
+
+        // First record arrives -> only its row updates, the next fetch starts
+        const notifiesBefore = notifyOutputChanged.mock.calls.length;
+        pending.get(ids[0])!.resolve(instanceFor(ids[0]));
+        await flush();
+
+        let current = rows(ctx);
+        expect(current[0]).toMatchObject({ isLoading: false, bpfInstance: expect.objectContaining({ processId: 'bpf-1' }) });
+        expect(current[1].isLoading).toBe(true);
+        expect(current[2].isLoading).toBe(true);
+        expect(control.updateView(ctx).props.isLoading).toBe(true);
+        expect(notifyOutputChanged.mock.calls.length).toBeGreaterThan(notifiesBefore);
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(spy).toHaveBeenLastCalledWith(ids[1], 'opportunity', expect.anything(), { throwOnError: true });
+
+        pending.get(ids[1])!.resolve(null);
+        await flush();
+        expect(rows(ctx)[1]).toMatchObject({ isLoading: false, bpfInstance: null, error: null });
+        expect(control.updateView(ctx).props.isLoading).toBe(true);
+
+        pending.get(ids[2])!.resolve(instanceFor(ids[2]));
+        await flush();
+
+        // Queue drained -> global loading cleared
+        current = rows(ctx);
+        expect(current.every(r => !r.isLoading)).toBe(true);
+        expect(control.updateView(ctx).props.isLoading).toBe(false);
+        expect(spy).toHaveBeenCalledTimes(3);
+      });
+
+      it('marks only the failing row with an error and keeps going', async () => {
+        const spy = jest.spyOn(BPFService.prototype, 'getBPFDataForRecord').mockImplementation(async (recordId: string) => {
+          if (recordId === ids[1]) throw new Error('Network error');
+          return instanceFor(recordId) as Awaited<ReturnType<BPFService['getBPFDataForRecord']>>;
+        });
+        const ctx = ctxFor(ids);
+
+        control.updateView(ctx);
+        await flush();
+
+        const current = rows(ctx);
+        expect(spy).toHaveBeenCalledTimes(3);
+        expect(current[0]).toMatchObject({ isLoading: false, error: null });
+        expect(current[1].isLoading).toBe(false);
+        expect(current[1].error).toBeTruthy();
+        expect(current[2]).toMatchObject({ isLoading: false, error: null });
+        expect(control.updateView(ctx).props.isLoading).toBe(false);
+      });
+
+      it('retries a failed row on the next dataset change but not the successful ones', async () => {
+        const spy = jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
+          .mockImplementation(async (recordId: string) => {
+            if (recordId === ids[1]) throw new Error('Network error');
+            return null;
+          });
+        control.updateView(ctxFor(ids));
+        await flush();
+        spy.mockClear();
+        spy.mockResolvedValue(null);
+
+        // Same records, different order -> dataset version changes
+        const reordered = ctxFor([ids[1], ids[0], ids[2]]);
+        control.updateView(reordered);
+        await flush();
+
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledWith(ids[1], 'opportunity', expect.anything(), { throwOnError: true });
+        expect(rows(reordered).find(r => r.recordId === ids[1])?.error).toBeNull();
+      });
+
+      it('stops the old queue when a newer dataset arrives', async () => {
+        const { spy, pending } = deferredSpy();
+        const other = '00000000-0000-0000-0000-000000000009';
+
+        control.updateView(ctxFor(ids));
+        await flush();
+        expect(spy).toHaveBeenCalledTimes(1);
+
+        // New view with a different record
+        const ctx2 = ctxFor([other]);
+        control.updateView(ctx2);
+        await flush();
+
+        // Old in-flight request settles late: must not touch the new rows or start ids[1]
+        pending.get(ids[0])!.resolve(instanceFor(ids[0]));
+        await flush();
+
+        const requested = spy.mock.calls.map(c => c[0]);
+        expect(requested).toEqual([ids[0], other]);
+        expect(rows(ctx2).map(r => r.recordId)).toEqual([other]);
+        expect(rows(ctx2)[0].isLoading).toBe(true);
+        expect(control.updateView(ctx2).props.isLoading).toBe(true);
+
+        pending.get(other)!.resolve(null);
+        await flush();
+        expect(control.updateView(ctx2).props.isLoading).toBe(false);
+      });
+
+      it('stops the queue on destroy', async () => {
+        const { spy, pending } = deferredSpy();
+        control.updateView(ctxFor(ids));
+        await flush();
+
+        control.destroy();
+        pending.get(ids[0])!.resolve(null);
+        await flush();
+
+        expect(spy).toHaveBeenCalledTimes(1);
+      });
     });
 
     it('returns "unknown" from getEntityNameFromConfig when config is missing', () => {
@@ -790,7 +976,7 @@ describe('BusinessProcessFlowViewer', () => {
         },
       } as unknown as ComponentFramework.Context<IInputs>;
 
-      const ctrl = new BusinessProcessFlowViewer();
+      const ctrl = new BPFViewerPlus();
       ctrl.init(noConfigContext, notifyOutputChanged);
 
       // processDataset will return early because bpfConfig is null
@@ -921,9 +1107,9 @@ describe('BusinessProcessFlowViewer', () => {
       };
 
       // Make BPF fetch fail to set an error
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
         .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValue(new Map());
+        .mockResolvedValue(null);
 
       const datasetCtx = {
         ...context,
@@ -984,8 +1170,8 @@ describe('BusinessProcessFlowViewer', () => {
       };
 
       // Make BPF fetch slow so abortController is set — use resolvable promise
-      let resolvePending!: (value: Map<string, null>) => void;
-      jest.spyOn(BPFService.prototype, 'getBPFDataForRecords')
+      let resolvePending!: (value: null) => void;
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord')
         .mockReturnValue(new Promise(resolve => { resolvePending = resolve; }));
 
       const datasetCtx = {
@@ -1009,7 +1195,7 @@ describe('BusinessProcessFlowViewer', () => {
       expect(() => control.destroy()).not.toThrow();
 
       // Cleanup: resolve pending promise to avoid worker leak
-      resolvePending(new Map());
+      resolvePending(null);
       await new Promise(resolve => setTimeout(resolve, 0));
     });
   });
