@@ -326,6 +326,36 @@ describe('review fixes', () => {
     }
   });
 
+  it('finishes loading even if the metadata service never answers (falls back to BPF labels)', async () => {
+    jest.useFakeTimers();
+    try {
+      const context = makeContext();
+      context.loaders!.loadFieldInfo = jest.fn(() => new Promise<Map<string, IFieldInfo>>(() => { /* hangs */ }));
+      context.loaders!.loadTableName = jest.fn(() => new Promise<string>(() => { /* hangs */ }));
+      renderWith(context);
+      act(() => triggers()[1].focus());
+      const card = screen.getByTestId('stage-details-card');
+      expect(card).toHaveTextContent('Loading steps');
+
+      const flush = async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+      };
+      // Steps and values resolve; the card then waits on the hung metadata calls
+      await act(flush);
+      expect(card).toHaveTextContent('Loading steps');
+      await act(async () => {
+        jest.advanceTimersByTime(4100);
+        await flush();
+      });
+
+      expect(card).not.toHaveTextContent('Loading steps');
+      expect(card).toHaveTextContent('Est. Budget');
+      expect(card).toHaveTextContent('Required to move on: Purchase Timeframe');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('the open card is a named group', async () => {
     renderWith(makeContext());
     await openStage(1);

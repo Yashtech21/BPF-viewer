@@ -30,6 +30,9 @@ Existing configurations keep working: new properties default sensibly when absen
 
 ### Fixed
 
+- Stage hover card could stay on "Loading steps…" when the platform metadata service (field labels,
+  table names) was slow or never answered: those lookups are now capped at 4s and the card falls back to
+  the BPF's own step labels. Debug mode (`BPF_DEBUG`) logs how long each card phase took. (1.2.2)
 - Stage hover card never appeared in D365 when focus was inside an iframe on the page (web resources,
   internal frames): Fluent closes popovers while an iframe is focused. The card now sets
   `closeOnIframeFocus={false}` (it already closes on mouse-leave, blur and Escape). (1.2.1)

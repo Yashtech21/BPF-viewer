@@ -20,6 +20,49 @@ import type { IBPFStage, IFieldInfo, IFieldValue, IStageStep } from '../../types
 import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
 import type { IStageDetailsContextValue } from './StageDetailsContext';
 import { findRelatedRecordId, getProcessStatus } from '../../utils/stageDetails';
+import { createLogger } from '../../utils/logger';
+
+const log = createLogger('[StageCard]');
+
+/**
+ * Labels and table names are nice-to-have: never let the platform metadata
+ * service (which has no timeout of its own) keep the card on "Loading".
+ */
+const METADATA_TIMEOUT_MS = 4000;
+
+/** Resolve with `fallback` if `promise` rejects or takes longer than `ms` */
+export function withFallback<T>(promise: Promise<T>, ms: number, fallback: T, what: string): Promise<T> {
+  return new Promise<T>(resolve => {
+    const timer = setTimeout(() => {
+      log.warn(`${what} took over ${ms}ms; continuing without it`);
+      resolve(fallback);
+    }, ms);
+    promise.then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        log.warn(`${what} failed; continuing without it:`, error);
+        resolve(fallback);
+      }
+    );
+  });
+}
+
+/** Debug-mode timing of each phase (sessionStorage BPF_DEBUG=true) */
+async function timed<T>(what: string, work: () => Promise<T>): Promise<T> {
+  const start = Date.now();
+  try {
+    const result = await work();
+    log.warn(`${what}: ${Date.now() - start}ms`);
+    return result;
+  } catch (error) {
+    log.warn(`${what}: failed after ${Date.now() - start}ms`, error);
+    throw error;
+  }
+}
 
 export type FieldState = 'filled' | 'empty' | 'hidden' | 'unknown';
 
@@ -155,7 +198,7 @@ export function useStageModel(
     const run = async () => {
       let steps: IStageStep[];
       try {
-        steps = stage.steps ?? (await loaders!.loadStageSteps!(stage));
+        steps = stage.steps ?? (await timed(`steps for "${stage.stageName}"`, () => loaders!.loadStageSteps!(stage)));
       } catch {
         if (!cancelled) setState(prev => ({ ...prev, loading: false, stepsFailed: true }));
         return;
@@ -164,7 +207,12 @@ export function useStageModel(
       const fields = steps.map(s => s.fieldName).filter(Boolean);
       const infoPromise =
         fields.length && loaders?.loadFieldInfo
-          ? loaders.loadFieldInfo(valuesEntity, fields).catch(() => EMPTY_INFO)
+          ? withFallback(
+              timed(`field labels for ${valuesEntity}`, () => loaders.loadFieldInfo!(valuesEntity, fields)),
+              METADATA_TIMEOUT_MS,
+              EMPTY_INFO,
+              `Field labels for ${valuesEntity}`
+            )
           : Promise.resolve(EMPTY_INFO);
 
       let values: Map<string, IFieldValue> | null = null;
@@ -174,7 +222,9 @@ export function useStageModel(
           valuesSource = 'unavailable-other-table';
         } else {
           try {
-            values = await loaders.loadRecordValues(valuesEntity, valuesRecordId);
+            values = await timed(`values of ${valuesEntity} ${valuesRecordId}`, () =>
+              loaders.loadRecordValues!(valuesEntity, valuesRecordId)
+            );
             valuesSource = stageEntity ? 'related' : 'record';
           } catch {
             valuesSource = 'error';
@@ -184,7 +234,12 @@ export function useStageModel(
 
       const tableNamePromise =
         stageEntity && loaders?.loadTableName
-          ? loaders.loadTableName(stageEntity).catch(() => null)
+          ? withFallback<string | null>(
+              timed(`table name for ${stageEntity}`, () => loaders.loadTableName!(stageEntity)),
+              METADATA_TIMEOUT_MS,
+              null,
+              `Table name for ${stageEntity}`
+            )
           : Promise.resolve(null);
 
       const [fieldInfo, otherTableName] = await Promise.all([infoPromise, tableNamePromise]);
