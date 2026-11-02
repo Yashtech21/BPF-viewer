@@ -300,6 +300,32 @@ describe('review fixes', () => {
     await waitFor(() => expect(liveFor()).toEqual([]));
   });
 
+  it('stays open when focus sits inside an iframe elsewhere on the page (D365 web resources)', async () => {
+    jest.useFakeTimers();
+    const frame = document.createElement('iframe');
+    document.body.appendChild(frame);
+    try {
+      renderWith(makeContext());
+      frame.focus();
+      expect(document.activeElement).toBe(frame);
+
+      fireEvent.mouseEnter(triggers()[1]);
+      act(() => {
+        jest.advanceTimersByTime(300);
+      });
+      expect(screen.getByTestId('stage-details-card')).toBeInTheDocument();
+
+      // Fluent polls document.activeElement for iframes (~1s); the card must survive it
+      act(() => {
+        jest.advanceTimersByTime(2500);
+      });
+      expect(screen.getByTestId('stage-details-card')).toBeInTheDocument();
+    } finally {
+      frame.remove();
+      jest.useRealTimers();
+    }
+  });
+
   it('the open card is a named group', async () => {
     renderWith(makeContext());
     await openStage(1);

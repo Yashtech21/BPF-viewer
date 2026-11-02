@@ -216,6 +216,11 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
         mouseLeaveDelay={150}
         withArrow
         positioning={{ position: 'above', autoSize: true }}
+        // Fluent closes popovers while document.activeElement is an iframe (it
+        // polls for it). D365 pages host iframes (web resources, internal
+        // frames), so focus often sits in one and the card closed the instant
+        // it opened. We already close on mouse-leave, blur and Escape.
+        closeOnIframeFocus={false}
         size="small"
       >
         <PopoverTrigger disableButtonEnhancement>{trigger}</PopoverTrigger>

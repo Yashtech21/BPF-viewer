@@ -30,6 +30,9 @@ Existing configurations keep working: new properties default sensibly when absen
 
 ### Fixed
 
+- Stage hover card never appeared in D365 when focus was inside an iframe on the page (web resources,
+  internal frames): Fluent closes popovers while an iframe is focused. The card now sets
+  `closeOnIframeFocus={false}` (it already closes on mouse-leave, blur and Escape). (1.2.1)
 - Stage hover card no longer states things that aren't true: completed stages list values (no fill bar),
   noting required fields that are empty on the record now; an aborted process says it stopped instead of
   "missing to move on"; field-secured values show "No access" instead of "Empty"; failed loads say so
