@@ -23,6 +23,10 @@ import type { IBPFDesignProps, IBPFStage, IFieldInfo, IFieldValue, IStageStep } 
 
 expect.extend(toHaveNoViolations);
 
+// Popover open/close cycles in jsdom take a few seconds each; under a full
+// parallel run some tests here exceed Jest's 5s default without being stuck.
+jest.setTimeout(15000);
+
 const NOW = Date.parse('2026-11-01T12:00:00Z');
 const colors = createMockStageColors();
 const RECORD = '00000000-0000-0000-0000-000000000001';
@@ -117,16 +121,34 @@ describe('data truth', () => {
     expect(card).not.toHaveTextContent('filled');
   });
 
-  it('a secured field without a value shows "No access", not empty, and does not block', async () => {
+  it('a secured required field without a value is "Empty or no access" and reported as unverifiable', async () => {
     const context = makeContext();
     (context.loaders!.loadFieldInfo as jest.Mock).mockResolvedValue(
       new Map<string, IFieldInfo>([['purchasetimeframe', { isSecured: true }]])
     );
     renderWith(context);
     const card = await openStage(1);
-    expect(card).toHaveTextContent('No access');
+    expect(card).toHaveTextContent('Empty or no access');
     expect(card).toHaveTextContent('2/2 filled');
     expect(card).not.toHaveTextContent('Required to move on');
+    // Never claims everything required is filled when it can't know
+    expect(card).toHaveTextContent("Couldn't check required field: Purchase Timeframe");
+    expect(triggers()[1]).toHaveAccessibleDescription(
+      "2 of 2 fields filled. Couldn't check required field: Purchase Timeframe."
+    );
+  });
+
+  it('a required field the record did not return is reported as unverifiable, not passed', async () => {
+    const context = makeContext();
+    (context.loaders!.loadRecordValues as jest.Mock).mockResolvedValue(
+      new Map<string, IFieldValue>([
+        ['budgetamount', { hasValue: true, display: '$1' }],
+        ['parentcontactid', { hasValue: true, display: 'X' }],
+      ])
+    );
+    renderWith(context);
+    const card = await openStage(1);
+    expect(card).toHaveTextContent("Couldn't check required field: Purchase Timeframe");
   });
 
   it('uses the localized display name when the BPF step has no label of its own', async () => {
@@ -154,6 +176,21 @@ describe('data truth', () => {
     const card = await openStage(0);
     expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('lead', LEAD);
     expect(card).toHaveTextContent('Values from the related Lead record');
+    expect(card).toHaveTextContent('$5,000.00');
+  });
+
+  it('names another table by its localized display name when available', async () => {
+    const context = makeContext();
+    context.loaders!.loadTableName = jest.fn().mockResolvedValue('Potential Customer');
+    context.instance = {
+      ...context.instance,
+      relatedRecordIds: { bpf_leadid: LEAD },
+      stages: context.instance.stages.map(s => (s.stageId === 's1' ? { ...s, entityName: 'lead' } : s)),
+    };
+    renderWith(context);
+    const card = await openStage(0);
+    expect(context.loaders!.loadTableName).toHaveBeenCalledWith('lead');
+    expect(card).toHaveTextContent('Values from the related Potential Customer record');
     expect(card).toHaveTextContent('$5,000.00');
   });
 
@@ -197,6 +234,105 @@ describe('data truth', () => {
   });
 });
 
+describe('review fixes', () => {
+  it('retrying after a failed load shows a loading state, then the fields', async () => {
+    const context = makeContext();
+    let fail = true;
+    (context.loaders!.loadStageSteps as jest.Mock).mockImplementation(async () => {
+      if (fail) throw new Error('blip');
+      return steps;
+    });
+    renderWith(context);
+    const card = await openStage(1);
+    expect(card).toHaveTextContent("Couldn't load this stage's fields");
+
+    act(() => triggers()[1].blur());
+    await waitFor(() => expect(screen.queryByTestId('stage-details-card')).not.toBeInTheDocument());
+    fail = false;
+    act(() => triggers()[1].focus());
+    const reopened = await screen.findByTestId('stage-details-card');
+    expect(reopened).not.toHaveTextContent("Couldn't load");
+    await waitFor(() => expect(reopened).toHaveTextContent('Required to move on: Purchase Timeframe'));
+  });
+
+  it('clicking a stage toggles its card and does not reach the row (no navigation)', async () => {
+    const onRowClick = jest.fn();
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <div onClick={onRowClick}>
+          <StageDetailsContext.Provider value={makeContext()}>
+            <ModernDesign stages={makeStages(1)} displayMode="stage" colors={colors} showPulse isMobile={false} />
+          </StageDetailsContext.Provider>
+        </div>
+      </FluentProvider>
+    );
+    fireEvent.click(triggers()[2]);
+    expect(onRowClick).not.toHaveBeenCalled();
+    expect(await screen.findByTestId('stage-details-card')).toHaveTextContent('Propose');
+  });
+
+  it('hovering announces nothing; the description is empty while closed', async () => {
+    jest.useFakeTimers();
+    try {
+      renderWith(makeContext());
+      const live = () => Array.from(document.querySelectorAll('[aria-live="polite"]')).map(n => n.textContent).join('');
+      expect(triggers()[1]).toHaveAccessibleDescription('');
+      fireEvent.mouseEnter(triggers()[1]);
+      await act(async () => {
+        jest.advanceTimersByTime(300);
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId('stage-details-card')).toBeInTheDocument();
+      expect(live()).toBe('');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('announces the loaded summary once for the focused stage and clears it silently on blur', async () => {
+    renderWith(makeContext());
+    const liveFor = () => Array.from(document.querySelectorAll('[aria-live="polite"]')).map(n => n.textContent).filter(Boolean);
+    await openStage(1);
+    await waitFor(() => expect(liveFor()).toEqual(['2 of 3 fields filled. Required to move on: Purchase Timeframe.']));
+    act(() => triggers()[1].blur());
+    await waitFor(() => expect(liveFor()).toEqual([]));
+  });
+
+  it('the open card is a named group', async () => {
+    renderWith(makeContext());
+    await openStage(1);
+    expect(screen.getByRole('group', { name: 'Details for stage Develop' })).toBeInTheDocument();
+  });
+
+  it('two controls showing the same record get distinct ids, and arrows stay in their own row', () => {
+    const ctx = makeContext();
+    render(
+      <FluentProvider theme={webLightTheme}>
+        <StageDetailsContext.Provider value={ctx}>
+          <div data-bpf-row="" data-testid="row-a">
+            <ModernDesign stages={ctx.instance.stages} displayMode="stage" colors={colors} showPulse isMobile={false} />
+          </div>
+          <div data-bpf-row="" data-testid="row-b">
+            <ModernDesign stages={ctx.instance.stages} displayMode="stage" colors={colors} showPulse isMobile={false} />
+          </div>
+        </StageDetailsContext.Provider>
+      </FluentProvider>
+    );
+    const all = triggers();
+    expect(all).toHaveLength(6);
+    const ids = all.map(t => t.getAttribute('aria-describedby'));
+    expect(new Set(ids).size).toBe(6);
+
+    act(() => all[2].focus()); // last stage of row A
+    fireEvent.keyDown(all[2], { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(all[2]); // did not jump into row B
+    fireEvent.keyDown(all[2], { key: 'Home' });
+    expect(document.activeElement).toBe(all[0]);
+  });
+});
+
 describe('model helpers', () => {
   it('lists names compactly', () => {
     const rows = buildRows(steps, values(), new Map());
@@ -208,8 +344,8 @@ describe('model helpers', () => {
   it('describes fields for screen readers by framing', () => {
     const rows = buildRows(steps, values(), new Map());
     const base = {
-      loading: false, stepsFailed: false, rows, valuesSource: 'record' as const, otherTable: null,
-      countable: 3, filled: 2, requiredEmpty: [rows[2]],
+      loading: false, stepsFailed: false, rows, valuesSource: 'record' as const, otherTable: null, otherTableName: null,
+      countable: 3, filled: 2, requiredEmpty: [rows[2]], requiredUnverified: [],
     };
     expect(describeFields({ ...base, framing: 'current' })).toBe('2 of 3 fields filled. Required to move on: Purchase Timeframe.');
     expect(describeFields({ ...base, framing: 'completed' })).toBe('2 of 3 fields filled. 1 required field is empty on the record now.');

@@ -340,6 +340,7 @@ export const BPFRow: React.FC<IBPFRowProps> = React.memo(({
         severity === 'warning' && styles.accentWarning,
         severity === 'danger' && styles.accentDanger
       )}
+      data-bpf-row=""
       onClick={handleClick}
       onKeyDown={rowIsButton ? handleKeyDown : undefined}
       role={rowIsButton ? 'button' : 'article'}

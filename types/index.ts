@@ -225,6 +225,8 @@ export interface IFieldInfo {
 
 /** Async loaders used by stage hover cards (provided by the PCF host) */
 export interface IStageDetailsLoaders {
+  /** Localized display name of a table (e.g. "Lead"), cached by the host */
+  loadTableName?: (entityName: string) => Promise<string>;
   /** Field metadata (display names, field security) for a table, cached by the host */
   loadFieldInfo?: (entityName: string, fieldNames: string[]) => Promise<Map<string, IFieldInfo>>;
   /** Resolve the steps for a stage (from clientdata), cached by the service */

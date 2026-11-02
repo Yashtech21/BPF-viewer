@@ -35,16 +35,15 @@ import {
 import type { IBPFStage } from '../../types';
 import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
 import type { IStageDetailsContextValue } from './StageDetailsContext';
-import { IStageModel, IStageFieldRow, listNames } from './useStageModel';
+import { IStageModel, IStageFieldRow, listNames, tableLabel } from './useStageModel';
+import { useVisuallyHiddenStyles } from './visuallyHidden';
 import { sanitizeText } from '../../utils/sanitize';
 import {
   PROCESS_STATUS_LABELS,
   daysBetween,
   formatDate,
   formatDays,
-  getAgeSeverity,
-  getDaysInActiveStage,
-  getProcessStatus,
+  getStageTiming,
 } from '../../utils/stageDetails';
 
 /** Max steps listed before collapsing into "+N more" */
@@ -154,16 +153,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
-  visuallyHidden: {
-    position: 'absolute',
-    width: '1px',
-    height: '1px',
-    margin: '-1px',
-    overflow: 'hidden',
-    clip: 'rect(0 0 0 0)',
-    whiteSpace: 'nowrap',
-    border: 0,
-  },
   footer: {
     display: 'flex',
     flexDirection: 'column',
@@ -190,17 +179,11 @@ export interface IStageDetailsCardProps {
 export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, status, index, total, context, model }) => {
   const styles = useStyles();
   const { instance, colors, stageAgeWarningDays, now } = context;
-  const { loading, stepsFailed, rows, framing, valuesSource, otherTable, countable, filled, requiredEmpty } = model;
+  const { loading, stepsFailed, rows, framing, valuesSource, countable, filled, requiredEmpty, requiredUnverified } = model;
 
-  const processStatus = instance.processStatus ?? getProcessStatus(instance.statusCode);
+  const { processStatus, stopped, days: daysInStage, severity } = getStageTiming(stage, instance, now, stageAgeWarningDays);
   const isAborted = processStatus === 'aborted';
-  const badge = isAborted && stage.isActive
-    ? { label: 'Stopped here', color: 'danger' as const }
-    : STATUS_BADGE[status];
-
-  // ---- Time in stage (active stage only) ----
-  const daysInStage = stage.isActive ? getDaysInActiveStage(instance, now) : null;
-  const severity = getAgeSeverity(daysInStage, stageAgeWarningDays);
+  const badge = stopped ? { label: 'Stopped here', color: 'danger' as const } : STATUS_BADGE[status];
 
   // ---- Fields ----
   const hasValues = valuesSource === 'record' || valuesSource === 'related';
@@ -208,7 +191,7 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
   const showCount = hasValues && countable > 0 && (framing === 'current' || framing === 'upcoming');
   const visibleRows = rows.slice(0, MAX_VISIBLE_STEPS);
   const hiddenCount = rows.length - visibleRows.length;
-  const tableName = otherTable ? toTitle(otherTable) : '';
+  const tableName = tableLabel(model);
 
   // ---- Header icon ----
   const headerIcon =
@@ -326,6 +309,12 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
                   <span>Required to move on: {listNames(requiredEmpty)}</span>
                 </div>
               )}
+              {hasValues && framing === 'current' && requiredEmpty.length === 0 && requiredUnverified.length > 0 && (
+                <div className={styles.muted}>
+                  Couldn&apos;t check required {requiredUnverified.length === 1 ? 'field' : 'fields'}:{' '}
+                  {listNames(requiredUnverified)} (field security or not on this record)
+                </div>
+              )}
               {hasValues && framing === 'completed' && requiredEmpty.length > 0 && (
                 <div className={styles.muted}>
                   {requiredEmpty.length} required {requiredEmpty.length === 1 ? 'field is' : 'fields are'} empty on the
@@ -370,12 +359,9 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
   );
 };
 
-function toTitle(logicalName: string): string {
-  return logicalName.charAt(0).toUpperCase() + logicalName.slice(1);
-}
-
 const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, showState }) => {
   const styles = useStyles();
+  const hidden = useVisuallyHiddenStyles();
   const { step, label, state, display } = row;
   const name = sanitizeText(label);
 
@@ -389,7 +375,8 @@ const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, 
     value = display ? sanitizeText(display) : 'Set';
   } else if (state === 'hidden') {
     icon = <LockClosedRegular className={styles.stepIconTodo} aria-hidden="true" />;
-    value = 'No access';
+    // Secured + no value: either empty or not readable by this user
+    value = 'Empty or no access';
   } else {
     icon = <CircleRegular className={styles.stepIconTodo} aria-hidden="true" />;
     value = 'Empty';
@@ -403,7 +390,7 @@ const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, 
         {step.isRequired && (
           <span className={styles.required}>
             <span aria-hidden="true">*</span>
-            <span className={styles.visuallyHidden}> (required)</span>
+            <span className={hidden.root}> (required)</span>
           </span>
         )}
       </span>

@@ -10,6 +10,9 @@
  * - values: the record the stage runs on — the row's record, or for a stage on
  *   another table, the record the BPF instance points at (e.g. its lead)
  * - field security: a secured field with no value is "hidden", never "empty"
+ *
+ * A required field the card can't verify (secured, or not returned by the
+ * record) is never silently treated as filled: it is reported as "couldn't check".
  */
 
 import * as React from 'react';
@@ -45,13 +48,20 @@ export interface IStageModel {
   framing: StageFraming;
   rows: IStageFieldRow[];
   valuesSource: ValuesSource;
-  /** Table the stage runs on, when it differs from the row's table */
+  /** Table the stage runs on, when it differs from the row's table (logical name) */
   otherTable: string | null;
+  /** Localized display name of otherTable, when known */
+  otherTableName: string | null;
   /** Fields whose fill state is known (excludes hidden/unknown) */
   countable: number;
   filled: number;
   /** Required fields that are empty (not hidden/unknown) */
   requiredEmpty: IStageFieldRow[];
+  /**
+   * Required fields whose value can't be verified although values loaded:
+   * secured without a readable value, or not returned by the record
+   */
+  requiredUnverified: IStageFieldRow[];
 }
 
 export function getFraming(stage: IBPFStage, status: StageStatus, context: IStageDetailsContextValue): StageFraming {
@@ -81,7 +91,8 @@ export function buildRows(
     if (value?.hasValue) {
       return { step, label, state: 'filled' as const, display: value.display };
     }
-    // A secured column the user can't read comes back empty: don't claim it is
+    // A secured column comes back empty both when it IS empty and when the user
+    // can't read it — the two are indistinguishable, so don't claim either
     if (info?.isSecured) {
       return { step, label, state: 'hidden' as const, display: null };
     }
@@ -100,6 +111,7 @@ interface ILoadState {
   values: Map<string, IFieldValue> | null;
   fieldInfo: Map<string, IFieldInfo>;
   valuesSource: ValuesSource;
+  otherTableName: string | null;
 }
 
 const EMPTY_INFO = new Map<string, IFieldInfo>();
@@ -131,11 +143,14 @@ export function useStageModel(
     values: null,
     fieldInfo: EMPTY_INFO,
     valuesSource: 'none',
+    otherTableName: null,
   });
 
   React.useEffect(() => {
     if (!enabled || !context || !canLoadSteps) return undefined;
     let cancelled = false;
+    // (Re)opening = (re)loading: never show a previous failure or stale values while retrying
+    setState(prev => ({ ...prev, loading: true, stepsFailed: false, values: null, valuesSource: 'none' }));
 
     const run = async () => {
       let steps: IStageStep[];
@@ -167,9 +182,14 @@ export function useStageModel(
         }
       }
 
-      const fieldInfo = await infoPromise;
+      const tableNamePromise =
+        stageEntity && loaders?.loadTableName
+          ? loaders.loadTableName(stageEntity).catch(() => null)
+          : Promise.resolve(null);
+
+      const [fieldInfo, otherTableName] = await Promise.all([infoPromise, tableNamePromise]);
       if (!cancelled) {
-        setState({ loading: false, stepsFailed: false, steps, values, fieldInfo, valuesSource });
+        setState({ loading: false, stepsFailed: false, steps, values, fieldInfo, valuesSource, otherTableName });
       }
     };
 
@@ -177,13 +197,13 @@ export function useStageModel(
     return () => {
       cancelled = true;
     };
-    // stage identity is stable per stageId
-  }, [enabled, stage.stageId, valuesEntity, valuesRecordId]);
+  }, [enabled, stage.stageId, stage.steps, loaders, valuesEntity, valuesRecordId]);
 
   return React.useMemo(() => {
     if (!context) return null;
     const rows = buildRows(state.steps, state.values, state.fieldInfo);
     const known = rows.filter(r => r.state === 'filled' || r.state === 'empty');
+    const valuesLoaded = state.valuesSource === 'record' || state.valuesSource === 'related';
     return {
       loading: state.loading,
       stepsFailed: state.stepsFailed,
@@ -191,9 +211,13 @@ export function useStageModel(
       rows,
       valuesSource: state.valuesSource,
       otherTable: stageEntity,
+      otherTableName: state.otherTableName,
       countable: known.length,
       filled: known.filter(r => r.state === 'filled').length,
       requiredEmpty: rows.filter(r => r.step.isRequired && r.state === 'empty'),
+      requiredUnverified: valuesLoaded
+        ? rows.filter(r => r.step.isRequired && r.step.fieldName && (r.state === 'hidden' || r.state === 'unknown'))
+        : [],
     };
   }, [state, stage, status, context, stageEntity]);
 }
@@ -217,9 +241,11 @@ export function describeFields(model: IStageModel): string {
   const count = `${model.filled} of ${model.countable} fields filled.`;
   switch (model.framing) {
     case 'current':
-      return model.requiredEmpty.length
-        ? `${count} Required to move on: ${listNames(model.requiredEmpty)}.`
-        : `${count} All required fields are filled.`;
+      if (model.requiredEmpty.length) return `${count} Required to move on: ${listNames(model.requiredEmpty)}.`;
+      if (model.requiredUnverified.length) {
+        return `${count} Couldn't check required ${model.requiredUnverified.length === 1 ? 'field' : 'fields'}: ${listNames(model.requiredUnverified)}.`;
+      }
+      return `${count} All required fields are filled.`;
     case 'completed':
       return model.requiredEmpty.length
         ? `${count} ${model.requiredEmpty.length} required ${model.requiredEmpty.length === 1 ? 'field is' : 'fields are'} empty on the record now.`
@@ -229,4 +255,11 @@ export function describeFields(model: IStageModel): string {
     default:
       return count;
   }
+}
+
+/** Display name for another table: localized name when loaded, else a tidy logical name */
+export function tableLabel(model: Pick<IStageModel, 'otherTable' | 'otherTableName'>): string {
+  if (model.otherTableName) return model.otherTableName;
+  const name = model.otherTable ?? '';
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }

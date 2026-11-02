@@ -1309,6 +1309,31 @@ describe('BPFViewerPlus', () => {
       expect(typeof element.props.loaders.loadRecordValues).toBe('function');
     });
 
+    it('caches field metadata, including fields metadata cannot describe', async () => {
+      const getEntityMetadata = jest.fn().mockResolvedValue({
+        Attributes: { get: (n: string) => (n === 'budgetamount' ? { DisplayName: 'Budget', IsSecured: false } : undefined) },
+      });
+      (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = getEntityMetadata;
+      control.init(context, notifyOutputChanged);
+      const { loaders } = control.updateView(context).props;
+
+      const first = await loaders.loadFieldInfo('opportunity', ['budgetamount', 'notonthistable']);
+      const second = await loaders.loadFieldInfo('opportunity', ['budgetamount', 'notonthistable']);
+
+      expect(getEntityMetadata).toHaveBeenCalledTimes(1);
+      expect(first.get('budgetamount')).toEqual({ displayName: 'Budget', isSecured: false });
+      expect(second.get('notonthistable')).toEqual({});
+    });
+
+    it('provides localized table names to the hover card', async () => {
+      (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = jest
+        .fn()
+        .mockResolvedValue({ DisplayName: 'Potential Customer' });
+      control.init(context, notifyOutputChanged);
+      const { loaders } = control.updateView(context).props;
+      await expect(loaders.loadTableName('lead')).resolves.toBe('Potential Customer');
+    });
+
     it('ignores non-positive overdue thresholds', () => {
       (context.parameters as unknown as Record<string, unknown>).stageAgeWarningDays = { raw: 0 };
       control.init(context, notifyOutputChanged);

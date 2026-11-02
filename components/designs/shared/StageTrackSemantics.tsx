@@ -9,21 +9,8 @@
  */
 
 import * as React from 'react';
-import { makeStyles } from '@fluentui/react-components';
 import { useStageDetailsContext } from '../../stageDetails/StageDetailsContext';
-
-const useStyles = makeStyles({
-  visuallyHidden: {
-    position: 'absolute',
-    width: '1px',
-    height: '1px',
-    margin: '-1px',
-    overflow: 'hidden',
-    clip: 'rect(0 0 0 0)',
-    whiteSpace: 'nowrap',
-    border: 0,
-  },
-});
+import { useVisuallyHiddenStyles } from '../../stageDetails/visuallyHidden';
 
 export interface IProgressAria {
   min: number;
@@ -50,11 +37,11 @@ export function useTrackProps(progress: IProgressAria): React.HTMLAttributes<HTM
 /** Hidden progressbar rendered inside the track when it is a group */
 export const HiddenProgress: React.FC<{ progress: IProgressAria }> = ({ progress }) => {
   const details = useStageDetailsContext();
-  const styles = useStyles();
+  const hidden = useVisuallyHiddenStyles();
   if (!details?.enabled) return null;
   return (
     <span
-      className={styles.visuallyHidden}
+      className={hidden.root}
       role="progressbar"
       aria-valuemin={progress.min}
       aria-valuemax={progress.max}

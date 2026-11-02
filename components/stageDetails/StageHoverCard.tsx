@@ -10,9 +10,10 @@
  * Keyboard (one tab stop per row, roving):
  *   - Tab lands on the row's current stage; ←/→ (and Home/End) move between stages
  *   - focusing a stage opens its card; Enter/Space toggles it; Escape closes it
- * Screen readers: each stage is a button whose description is a live summary
- *   of the card ("2 of 4 fields filled. Required to move on: …"), so the card's
- *   content is announced without moving focus into it.
+ * Screen readers: each stage is a button described by a summary of its card
+ *   ("2 of 4 fields filled. Required to move on: …"). When the focused stage's
+ *   fields finish loading, the summary is announced once; hovering announces nothing.
+ * Click and Enter/Space do the same thing (toggle the card); neither opens the record.
  * Escape closes the card from anywhere, including when it was opened by
  * hovering (WCAG 1.4.13 "dismissible").
  */
@@ -25,13 +26,15 @@ import {
   makeStyles,
   mergeClasses,
   tokens,
+  useId,
 } from '@fluentui/react-components';
 import type { IBPFStage } from '../../types';
 import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
 import { useStageDetailsContext } from './StageDetailsContext';
 import { StageDetailsCard } from './StageDetailsCard';
 import { describeFields, useStageModel } from './useStageModel';
-import { formatDays, getAgeSeverity, getDaysInActiveStage, getProcessStatus } from '../../utils/stageDetails';
+import { useVisuallyHiddenStyles } from './visuallyHidden';
+import { formatDays, getStageTiming } from '../../utils/stageDetails';
 
 const useStyles = makeStyles({
   trigger: {
@@ -49,16 +52,6 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     boxShadow: tokens.shadow16,
   },
-  visuallyHidden: {
-    position: 'absolute',
-    width: '1px',
-    height: '1px',
-    margin: '-1px',
-    overflow: 'hidden',
-    clip: 'rect(0 0 0 0)',
-    whiteSpace: 'nowrap',
-    border: 0,
-  },
 });
 
 /** How long the pointer must rest on a stage before the card opens */
@@ -66,6 +59,9 @@ const OPEN_DELAY_MS = 250;
 
 /** Marks stage triggers so arrow keys can find the row's other stages */
 export const STAGE_TRIGGER_ATTR = 'data-stage-trigger';
+
+/** Marks a record row; arrow-key navigation stays inside it */
+export const ROW_ATTR = 'data-bpf-row';
 
 const STATUS_WORD: Record<StageStatus, string> = {
   completed: 'completed',
@@ -83,13 +79,18 @@ export interface IStageHoverCardProps {
 
 const stopPropagation = (e: React.SyntheticEvent) => e.stopPropagation();
 
-/** Stable, selector-safe id fragment */
+/** Selector-safe fragment */
 const idPart = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '');
 
 export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, index, total, children }) => {
   const context = useStageDetailsContext();
   const styles = useStyles();
+  const hidden = useVisuallyHiddenStyles();
+  // Unique per instance: two controls on one form may show the same record
+  const summaryId = useId('bpf-stage-summary-');
+  const surfaceId = useId('bpf-stage-card-');
   const [open, setOpen] = React.useState(false);
+  const [focused, setFocused] = React.useState(false);
   const openTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const enabled = !!context && context.enabled;
   const model = useStageModel(stage, status, enabled ? context : null, enabled && open);
@@ -121,18 +122,13 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
   }
 
   const rowKey = idPart(context.recordId);
-  const summaryId = `bpf-stage-summary-${rowKey}-${idPart(stage.stageId)}`;
-  const surfaceId = `bpf-stage-card-${rowKey}-${idPart(stage.stageId)}`;
 
   // Roving tab stop: the row's current stage (or its last stage when none is current)
   const stages = context.instance.stages;
   const hasActive = stages.some(s => s.isActive);
   const isTabStop = hasActive ? stage.isActive : index === total - 1;
 
-  const processStatus = context.instance.processStatus ?? getProcessStatus(context.instance.statusCode);
-  const stopped = processStatus === 'aborted' && stage.isActive;
-  const days = stage.isActive ? getDaysInActiveStage(context.instance, context.now) : null;
-  const severity = getAgeSeverity(days, context.stageAgeWarningDays);
+  const { stopped, days, severity } = getStageTiming(stage, context.instance, context.now, context.stageAgeWarningDays);
   const label =
     `Stage ${index + 1} of ${total}: ${stage.stageName}, ${stopped ? 'stopped' : STATUS_WORD[status]}` +
     (days !== null && !stopped ? `, ${days === 0 ? 'entered today' : `${formatDays(days)} in stage`}` : '') +
@@ -149,9 +145,9 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
   };
 
   const moveFocus = (target: HTMLElement, key: string) => {
-    const row = Array.from(
-      document.querySelectorAll<HTMLElement>(`[${STAGE_TRIGGER_ATTR}="${rowKey}"]`)
-    );
+    // Stay inside this record's row (falls back to the document when rendered without one)
+    const scope: ParentNode = target.closest(`[${ROW_ATTR}]`) ?? document;
+    const row = Array.from(scope.querySelectorAll<HTMLElement>(`[${STAGE_TRIGGER_ATTR}="${rowKey}"]`));
     const at = row.indexOf(target);
     if (at < 0) return;
     const next =
@@ -165,6 +161,7 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
     onFocus?: React.FocusEventHandler;
     onBlur?: React.FocusEventHandler;
     onKeyDown?: React.KeyboardEventHandler;
+    onClick?: React.MouseEventHandler;
   };
   // A design whose single element *is* the progress indicator keeps that role
   const keepRole = childProps.role === 'progressbar';
@@ -181,12 +178,20 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
     onFocus: (e: React.FocusEvent) => {
       childProps.onFocus?.(e);
       clearTimer();
+      setFocused(true);
       setOpen(true);
     },
     onBlur: (e: React.FocusEvent) => {
       childProps.onBlur?.(e);
       clearTimer();
+      setFocused(false);
       setOpen(false);
+    },
+    // Same action as Enter/Space: toggle the card (handled by PopoverTrigger),
+    // and don't let the click reach the row, which would open the record
+    onClick: (e: React.MouseEvent) => {
+      childProps.onClick?.(e);
+      e.stopPropagation();
     },
     onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => {
       childProps.onKeyDown?.(e);
@@ -217,6 +222,7 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
         <PopoverSurface
           id={surfaceId}
           className={styles.surface}
+          role="group"
           aria-label={`Details for stage ${stage.stageName}`}
           onClick={stopPropagation}
           onKeyDown={stopPropagation}
@@ -225,9 +231,14 @@ export const StageHoverCard: React.FC<IStageHoverCardProps> = ({ stage, status, 
           <StageDetailsCard stage={stage} status={status} index={index} total={total} context={context} model={model} />
         </PopoverSurface>
       </Popover>
-      {/* Spoken summary of the card; updates (politely) once the fields load */}
-      <span id={summaryId} className={styles.visuallyHidden} aria-live="polite">
-        {open ? describeFields(model) : 'Press Enter for stage details.'}
+      {/* Description of the stage (read with its label on focus); empty while closed */}
+      <span id={summaryId} className={hidden.root}>
+        {open ? describeFields(model) : ''}
+      </span>
+      {/* Announce the loaded summary once, only for the keyboard-focused stage.
+          Clearing it on blur/close is not announced. */}
+      <span className={hidden.root} aria-live="polite">
+        {focused && open && !model.loading ? describeFields(model) : ''}
       </span>
     </>
   );

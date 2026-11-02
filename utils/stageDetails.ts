@@ -330,3 +330,32 @@ export function findRelatedRecordId(
   const prefixed = Object.keys(related).filter(attr => attr.endsWith(`_${target}`));
   return prefixed.length === 1 ? related[prefixed[0]] : null;
 }
+
+// ============================================
+// Per-stage timing / status (shared by the hover trigger and card)
+// ============================================
+
+export interface IStageTiming {
+  processStatus: ProcessStatus;
+  /** The process was aborted while this stage was current */
+  stopped: boolean;
+  /** Days in this stage — only for the current stage of an active process */
+  days: number | null;
+  severity: AgeSeverity;
+}
+
+export function getStageTiming(
+  stage: { isActive: boolean },
+  instance: IBPFInstance,
+  now: number | undefined,
+  warningDays: number | null | undefined
+): IStageTiming {
+  const processStatus = instance.processStatus ?? getProcessStatus(instance.statusCode);
+  const days = stage.isActive ? getDaysInActiveStage(instance, now) : null;
+  return {
+    processStatus,
+    stopped: processStatus === 'aborted' && stage.isActive,
+    days,
+    severity: getAgeSeverity(days, warningDays),
+  };
+}

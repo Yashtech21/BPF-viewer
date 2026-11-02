@@ -104,6 +104,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       loadStageSteps: (stage) => service.getStageSteps(stage),
       loadRecordValues: (entityName, recordId) => service.getRecordValues(entityName, recordId),
       loadFieldInfo: (entityName, fieldNames) => this.getFieldInfo(entityName, fieldNames),
+      loadTableName: (entityName) => this.getEntityDisplayName(entityName),
     };
 
     // Parse BPF configuration
@@ -477,8 +478,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       try {
         const metadata = await this.context.utils.getEntityMetadata(entityName, missing);
         for (const field of missing) {
-          const info = readAttributeInfo(metadata, field);
-          if (info) this.fieldInfoCache.set(`${entityName}|${field}`, info);
+          // Cache misses too (as {}), so unknown fields aren't re-requested on every hover
+          this.fieldInfoCache.set(`${entityName}|${field}`, readAttributeInfo(metadata, field) ?? {});
         }
       } catch (e) {
         logger.warn(`Field metadata unavailable for ${entityName}:`, e);
