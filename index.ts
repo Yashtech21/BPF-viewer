@@ -34,6 +34,7 @@ import { isValidEntityName, isValidGuid, isValidHexColor } from './utils/sanitiz
 import { logger } from './utils/logger';
 import { createPerfTracker } from './utils/perfTracker';
 import { runQueue } from './utils/taskQueue';
+import { ViewStore } from './utils/viewStore';
 
 /**
  * How many records are fetched in parallel. Rows still update one by one as
@@ -44,7 +45,6 @@ const BPF_FETCH_CONCURRENCY = 4;
 
 export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, IOutputs> {
   private context: ComponentFramework.Context<IInputs>;
-  private notifyOutputChanged: () => void;
   private bpfService: BPFService | null = null;
 
   // State
@@ -52,6 +52,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private isLoading: boolean = true;
   private error: string | null = null;
   private bpfConfig: IBPFConfiguration | null = null;
+
+  // Live state shared with the React tree (see utils/viewStore.ts)
+  private store = new ViewStore();
 
   // Cache to prevent redundant fetches
   private fetchedRecordIds: Set<string> = new Set();
@@ -77,10 +80,11 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
    */
   public init(
     context: ComponentFramework.Context<IInputs>,
-    notifyOutputChanged: () => void
+    // Not used: this control has no outputs, and for dataset controls it does
+    // not reliably trigger a re-render. UI updates go through publish().
+    _notifyOutputChanged: () => void
   ): void {
     this.context = context;
-    this.notifyOutputChanged = notifyOutputChanged;
 
     // Bind handlers once for stable references (preserves React.memo optimization)
     this.boundNavigate = this.handleNavigate.bind(this);
@@ -214,7 +218,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
         logger.error('Unhandled error in processDataset:', e);
         this.error = getErrorMessage(e);
         this.isLoading = false;
-        this.notifyOutputChanged();
+        this.publish();
       });
     }
 
@@ -237,7 +241,15 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     // Get platform theme if available (PCF provides Fluent v9 Theme via fluentDesignLanguage)
     const platformTheme = context.fluentDesignLanguage?.tokenTheme as Theme | undefined;
 
+    this.store.setState({
+      records: this.records,
+      isLoading: this.isLoading,
+      error: this.error,
+      datasetLoading: dataset.loading,
+    });
+
     return React.createElement(BPFViewer, {
+      store: this.store,
       records: this.records,
       settings: this.cachedSettings || this.getSettings(),
       colors: this.cachedColors || this.getColors(),
@@ -268,13 +280,15 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       this.abortController.abort();
     }
     this.abortController = new AbortController();
+    // Capture now: destroy() may null the field while we're awaiting below
+    const signal = this.abortController.signal;
     const currentGeneration = ++this.requestGeneration;
 
     const recordIds = dataset.sortedRecordIds || [];
     if (recordIds.length === 0) {
       this.records = [];
       this.isLoading = false;
-      this.notifyOutputChanged();
+      this.publish();
       return;
     }
 
@@ -301,8 +315,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     const entityDisplayName = await this.getEntityDisplayName(entityName);
     perf.measure('getEntityDisplayName');
 
-    // A newer dataset may have arrived while the display name resolved
-    if (currentGeneration !== this.requestGeneration) {
+    // A newer dataset may have arrived (or the control was destroyed) while the display name resolved
+    if (signal.aborted || currentGeneration !== this.requestGeneration) {
       return;
     }
 
@@ -335,7 +349,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     this.records = updatedRecords;
     this.isLoading = newRecordIds.length > 0;
-    this.notifyOutputChanged();
+    this.publish();
 
     if (newRecordIds.length === 0) {
       perf.summary();
@@ -344,7 +358,6 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     // Fetch BPF data one record at a time; each row updates as soon as its
     // own data arrives.
-    const signal = this.abortController.signal;
     const config = this.bpfConfig;
     const service = this.bpfService;
     const isStale = () => signal.aborted || currentGeneration !== this.requestGeneration;
@@ -376,7 +389,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
         }
 
         this.records = this.records.map(row => (row.recordId === recordId ? { ...row, ...update } : row));
-        this.notifyOutputChanged();
+        this.publish();
       },
       isStale
     );
@@ -391,7 +404,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     perf.summary();
 
     // Final render with the global loading flag cleared
-    this.notifyOutputChanged();
+    this.publish();
   }
 
   /**
@@ -495,10 +508,33 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     this.error = null;
     this.isLoading = true;
     this.lastDatasetVersion = ''; // Force reprocess
+    this.publish();
     
     // Trigger dataset refresh
     if (this.context.parameters.records.refresh) {
       this.context.parameters.records.refresh();
+    }
+  }
+
+  /**
+   * Push the current state to the UI.
+   *
+   * The React tree subscribes to the store, so it re-renders immediately.
+   * We also ask the host for a render (requestRender), but we don't depend on
+   * it: for dataset controls the host may skip re-rendering after
+   * notifyOutputChanged()/requestRender(), which left rows stuck on
+   * "Loading BPF..." until a manual refresh.
+   */
+  private publish(): void {
+    this.store.setState({
+      records: this.records,
+      isLoading: this.isLoading,
+      error: this.error,
+    });
+    try {
+      this.context?.factory?.requestRender?.();
+    } catch {
+      // Host doesn't support requestRender — the store subscription already updated the UI
     }
   }
 
@@ -513,6 +549,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
    * Destroy - cleanup
    */
   public destroy(): void {
+    // Invalidate any in-progress processDataset run
+    this.requestGeneration++;
+
     // Cancel any pending requests
     if (this.abortController) {
       this.abortController.abort();

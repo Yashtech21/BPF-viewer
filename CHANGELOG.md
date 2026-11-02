@@ -28,6 +28,14 @@ Existing configurations keep working: new properties default sensibly when absen
 - BPF instances now carry `processStatus`, `createdOn`, `modifiedOn`, `completedOn`, `activeStageStartedOn`, `modifiedByName`.
 - 82 new tests (453 total), including axe checks with hover cards enabled.
 
+### Fixed
+
+- Rows stayed on "Loading BPF..." until Refresh or a form reload: in dataset controls the host doesn't
+  reliably re-run `updateView()` after `notifyOutputChanged()`. The control now pushes state to the React
+  tree through a small store (`utils/viewStore.ts`) and also calls `context.factory.requestRender()`, so
+  each row updates as soon as its data arrives.
+- Destroying the control while data was loading no longer throws.
+
 ### Changed
 
 - **New control identity** so it can be installed beside the managed upstream v1.0.0:

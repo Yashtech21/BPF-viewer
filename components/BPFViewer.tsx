@@ -18,6 +18,7 @@ import {
 } from './BPFToolbar';
 import { getAgeSeverity, getDaysInActiveStage } from '../utils/stageDetails';
 import { ErrorBoundary } from './ErrorBoundary';
+import type { ViewStore, IViewState } from '../utils/viewStore';
 
 const MOBILE_BREAKPOINT = 480;
 
@@ -234,14 +235,54 @@ export interface IBPFViewerWithProviderProps extends IBPFViewerProps {
   platformTheme?: Theme;
   allocatedWidth?: number;
   allocatedHeight?: number;
+  /**
+   * Live state from the PCF control. When provided, the viewer re-renders as
+   * soon as the control publishes new data, without waiting for the host to
+   * call updateView() again.
+   */
+  store?: ViewStore;
+}
+
+/**
+ * Subscribe to the control's view store (React 16 compatible — no
+ * useSyncExternalStore). Returns the latest state, or null without a store.
+ */
+function useViewStore(store: ViewStore | undefined): IViewState | null {
+  const [, forceRender] = React.useReducer((n: number) => n + 1, 0);
+  const renderedVersion = store ? store.getVersion() : 0;
+
+  React.useEffect(() => {
+    if (!store) return undefined;
+    const unsubscribe = store.subscribe(forceRender);
+    // Catch updates published between render and subscription
+    if (store.getVersion() !== renderedVersion) {
+      forceRender();
+    }
+    return unsubscribe;
+    // renderedVersion intentionally read once per subscription
+  }, [store]);
+
+  return store ? store.getState() : null;
 }
 
 export const BPFViewer: React.FC<IBPFViewerWithProviderProps> = ({
   platformTheme,
   allocatedWidth,
   allocatedHeight,
-  ...props
+  store,
+  ...viewProps
 }) => {
+  const live = useViewStore(store);
+  // Live store state wins over (possibly stale) props from the last updateView
+  const props: IBPFViewerProps = live
+    ? {
+        ...viewProps,
+        records: live.records,
+        isLoading: live.isLoading || live.datasetLoading,
+        error: live.error,
+      }
+    : viewProps;
+
   const styles = useStyles();
   const containerRef = React.useRef<HTMLDivElement>(null);
 

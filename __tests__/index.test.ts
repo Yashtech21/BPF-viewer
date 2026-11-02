@@ -5,6 +5,8 @@
 import * as React from 'react';
 import { BPFViewerPlus } from '../index';
 import { BPFService } from '../services/BPFService';
+import { act, render, screen } from '@testing-library/react';
+import type { ViewStore } from '../utils/viewStore';
 import type { IInputs } from '../generated/ManifestTypes';
 
 // Helper to create mock context
@@ -836,8 +838,9 @@ describe('BPFViewerPlus', () => {
         return { spy, pending };
       }
 
+      type Row = { recordId: string; isLoading: boolean; error: string | null; bpfInstance: unknown };
       const rows = (ctx: ComponentFramework.Context<IInputs>) =>
-        control.updateView(ctx).props.records as Array<{ recordId: string; isLoading: boolean; error: string | null; bpfInstance: unknown }>;
+        control.updateView(ctx).props.records as Row[];
 
       const strict = expect.objectContaining({ throwOnError: true, signal: expect.anything() });
 
@@ -845,44 +848,75 @@ describe('BPFViewerPlus', () => {
         const { spy, pending } = deferredSpy();
         const ctx = ctxFor(ids);
 
-        control.updateView(ctx);
+        // Like D365 here: updateView is called once and NOT again afterwards.
+        // Everything below reads the live store the React tree subscribes to.
+        const store = control.updateView(ctx).props.store as ViewStore;
+        const live = () => store.getState().records as Row[];
         await flush();
 
         // All rows exist and are loading before any BPF data arrives
-        const initial = rows(ctx);
+        const initial = live();
         expect(initial.map(r => r.recordId)).toEqual(ids);
         expect(initial.every(r => r.isLoading)).toBe(true);
-        expect(notifyOutputChanged).toHaveBeenCalled();
+        expect(context.factory.requestRender).toHaveBeenCalled();
 
         // 3 records < concurrency limit: all requested up front, in order
         expect(spy.mock.calls.map(c => c[0])).toEqual(ids);
         expect(spy).toHaveBeenCalledWith(ids[0], 'opportunity', expect.anything(), strict);
 
         // Responses arrive out of order -> only that row updates
-        const notifiesBefore = notifyOutputChanged.mock.calls.length;
+        const versionBefore = store.getVersion();
         pending.get(ids[1])!.resolve(instanceFor(ids[1]));
         await flush();
 
-        let current = rows(ctx);
+        let current = live();
         expect(current[1]).toMatchObject({ isLoading: false, bpfInstance: expect.objectContaining({ processId: 'bpf-2' }) });
         expect(current[0].isLoading).toBe(true);
         expect(current[2].isLoading).toBe(true);
-        expect(control.updateView(ctx).props.isLoading).toBe(true);
-        expect(notifyOutputChanged.mock.calls.length).toBeGreaterThan(notifiesBefore);
+        expect(store.getState().isLoading).toBe(true);
+        expect(store.getVersion()).toBeGreaterThan(versionBefore);
 
         pending.get(ids[0])!.resolve(null);
         await flush();
-        expect(rows(ctx)[0]).toMatchObject({ isLoading: false, bpfInstance: null, error: null });
-        expect(control.updateView(ctx).props.isLoading).toBe(true);
+        expect(live()[0]).toMatchObject({ isLoading: false, bpfInstance: null, error: null });
+        expect(store.getState().isLoading).toBe(true);
 
         pending.get(ids[2])!.resolve(instanceFor(ids[2]));
         await flush();
 
-        // Queue drained -> global loading cleared
-        current = rows(ctx);
+        // Queue drained -> global loading cleared, without any further updateView
+        current = live();
         expect(current.every(r => !r.isLoading)).toBe(true);
-        expect(control.updateView(ctx).props.isLoading).toBe(false);
+        expect(store.getState().isLoading).toBe(false);
         expect(spy).toHaveBeenCalledTimes(3);
+
+        // And updateView (if the host does call it) agrees with the store
+        expect(rows(ctx).every(r => !r.isLoading)).toBe(true);
+      });
+
+      it('regression: the rendered grid shows fetched data without another updateView or refresh', async () => {
+        const { pending } = deferredSpy();
+        const ctx = ctxFor([ids[0]]);
+
+        // Render the element from the ONLY updateView call (the host never calls it again)
+        const element = control.updateView(ctx);
+        render(element);
+        await act(async () => {
+          await flush();
+        });
+        expect(screen.getByText('Loading BPF...')).toBeInTheDocument();
+
+        const withStage = {
+          ...instanceFor(ids[0]),
+          stages: [{ stageId: 's1', stageName: 'Qualify', stageCategory: 0, stageCategoryName: 'Qualify', stageOrder: 0, isActive: true, isCompleted: false }],
+        };
+        await act(async () => {
+          pending.get(ids[0])!.resolve(withStage);
+          await flush();
+        });
+
+        expect(screen.queryByText('Loading BPF...')).not.toBeInTheDocument();
+        expect(screen.getByText('Qualify')).toBeInTheDocument();
       });
 
       it('never has more than 4 requests in flight', async () => {
