@@ -86,7 +86,7 @@ function renderDesign(
 
 const activeStageElement = () => document.querySelector('[aria-current="step"]') as HTMLElement;
 /** The focusable trigger is the active stage element or its nearest wrapper */
-const activeTrigger = () => activeStageElement().closest('[aria-haspopup="dialog"]') as HTMLElement;
+const activeTrigger = () => activeStageElement().closest('[data-stage-trigger]') as HTMLElement;
 
 describe('StageHoverCard', () => {
   const designs: Array<[string, React.ComponentType<IBPFDesignProps>]> = [
@@ -103,7 +103,7 @@ describe('StageHoverCard', () => {
   it.each(designs)('%s: makes every stage focusable and opens the card on focus', async (_name, Design) => {
     renderDesign(Design);
 
-    expect(document.querySelectorAll('[aria-haspopup="dialog"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-stage-trigger]')).toHaveLength(3);
 
     act(() => {
       activeTrigger().focus();
@@ -116,7 +116,7 @@ describe('StageHoverCard', () => {
 
   it('fraction: the single block shows the current stage', async () => {
     renderDesign(FractionDesign);
-    const trigger = document.querySelector('[aria-haspopup="dialog"]') as HTMLElement;
+    const trigger = document.querySelector('[data-stage-trigger]') as HTMLElement;
     act(() => trigger.focus());
     expect(await screen.findByTestId('stage-details-card')).toHaveTextContent('Develop');
   });
@@ -152,13 +152,13 @@ describe('StageHoverCard', () => {
 
   it('renders the design untouched without a context', () => {
     renderDesign(ChevronDesign, null);
-    expect(document.querySelectorAll('[aria-haspopup="dialog"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-stage-trigger]')).toHaveLength(0);
     expect(activeStageElement()).toHaveAttribute('title');
   });
 
   it('renders the design untouched when disabled', () => {
     renderDesign(PillDesign, makeContext({ enabled: false }));
-    expect(document.querySelectorAll('[aria-haspopup="dialog"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-stage-trigger]')).toHaveLength(0);
   });
 
   it('does not let clicks inside the card bubble to the row', async () => {
@@ -199,7 +199,7 @@ describe('StageDetailsCard content', () => {
     expect(card).toHaveTextContent('Est. Budget');
     expect(card).toHaveTextContent('$5,000.00');
     expect(card).toHaveTextContent('Jane Doe');
-    expect(card).toHaveTextContent('1 required field missing to move on');
+    expect(card).toHaveTextContent('Required to move on: Purchase Timeframe');
     expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('opportunity', '00000000-0000-0000-0000-000000000001');
   });
 
@@ -232,7 +232,7 @@ describe('StageDetailsCard content', () => {
 
   it('shows "Not started yet" for upcoming stages', async () => {
     renderDesign(ModernDesign);
-    const upcoming = screen.getByLabelText(/Stage 3: Propose/).closest('[aria-haspopup="dialog"]') as HTMLElement;
+    const upcoming = screen.getByLabelText(/Stage 3 of 3: Propose/).closest('[data-stage-trigger]') as HTMLElement;
     act(() => upcoming.focus());
     expect(await screen.findByTestId('stage-details-card')).toHaveTextContent('Not started yet');
   });

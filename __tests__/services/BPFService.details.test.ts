@@ -261,12 +261,12 @@ describe('BPFService stage details', () => {
       expect(webApi.retrieveRecord).toHaveBeenCalledWith('processstage', STAGE_ID, '?$select=clientdata,primaryentitytypecode');
     });
 
-    it('returns [] on failure and retries next time', async () => {
+    it('rejects on failure (so the card can say so) and retries next time', async () => {
       (webApi.retrieveRecord as jest.Mock)
         .mockRejectedValueOnce(new Error('403'))
         .mockResolvedValueOnce({ clientdata: SAMPLE_CLIENT_DATA });
 
-      await expect(service.getStageSteps(stage())).resolves.toEqual([]);
+      await expect(service.getStageSteps(stage())).rejects.toThrow('403');
       await expect(service.getStageSteps(stage())).resolves.toHaveLength(3);
     });
 
@@ -291,9 +291,9 @@ describe('BPFService stage details', () => {
       expect(webApi.retrieveRecord).toHaveBeenCalledWith('opportunity', RECORD_ID);
     });
 
-    it('returns an empty map on failure or invalid input', async () => {
+    it('rejects on failure (never "all empty"), resolves empty for invalid input', async () => {
       (webApi.retrieveRecord as jest.Mock).mockRejectedValue(new Error('nope'));
-      await expect(service.getRecordValues('opportunity', RECORD_ID)).resolves.toEqual(new Map());
+      await expect(service.getRecordValues('opportunity', RECORD_ID)).rejects.toThrow('nope');
       await expect(service.getRecordValues('bad name!', RECORD_ID)).resolves.toEqual(new Map());
       await expect(service.getRecordValues('opportunity', 'not-a-guid')).resolves.toEqual(new Map());
     });

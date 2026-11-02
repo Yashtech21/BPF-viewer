@@ -158,6 +158,11 @@ export interface IBPFInstance {
   activeStageStartedOn?: string | null;
   /** Display name of the user who last modified the process instance, if returned */
   modifiedByName?: string | null;
+  /**
+   * Record lookups on the BPF instance (attribute logical name → record id),
+   * used to load values for stages that run on another table.
+   */
+  relatedRecordIds?: Record<string, string>;
 }
 
 // ============================================
@@ -210,8 +215,18 @@ export interface IControlSettings {
   density?: Density;
 }
 
+/** Metadata about a field, used to label steps and interpret empty values */
+export interface IFieldInfo {
+  /** Localized display name from table metadata */
+  displayName?: string;
+  /** Field-level security is enabled on the column */
+  isSecured?: boolean;
+}
+
 /** Async loaders used by stage hover cards (provided by the PCF host) */
 export interface IStageDetailsLoaders {
+  /** Field metadata (display names, field security) for a table, cached by the host */
+  loadFieldInfo?: (entityName: string, fieldNames: string[]) => Promise<Map<string, IFieldInfo>>;
   /** Resolve the steps for a stage (from clientdata), cached by the service */
   loadStageSteps?: (stage: IBPFStage) => Promise<IStageStep[]>;
   /** Load attribute values for a record so step completion can be shown */

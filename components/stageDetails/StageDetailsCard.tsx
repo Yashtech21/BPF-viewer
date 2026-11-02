@@ -29,10 +29,13 @@ import {
   WarningFilled,
   DismissCircleFilled,
   RecordRegular,
+  LockClosedRegular,
+  CircleHintRegular,
 } from '@fluentui/react-icons';
-import type { IBPFStage, IFieldValue, IStageStep } from '../../types';
+import type { IBPFStage } from '../../types';
 import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
 import type { IStageDetailsContextValue } from './StageDetailsContext';
+import { IStageModel, IStageFieldRow, listNames } from './useStageModel';
 import { sanitizeText } from '../../utils/sanitize';
 import {
   PROCESS_STATUS_LABELS,
@@ -151,6 +154,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
   },
+  visuallyHidden: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    margin: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0 0 0 0)',
+    whiteSpace: 'nowrap',
+    border: 0,
+  },
   footer: {
     display: 'flex',
     flexDirection: 'column',
@@ -170,62 +183,14 @@ export interface IStageDetailsCardProps {
   index: number;
   total: number;
   context: IStageDetailsContextValue;
+  /** Loaded/interpreted field data, shared with the trigger's spoken summary */
+  model: IStageModel;
 }
 
-interface ILoadState {
-  loading: boolean;
-  steps: IStageStep[] | null;
-  values: Map<string, IFieldValue> | null;
-}
-
-/** Lazily loads the steps and record values when the card mounts (i.e. opens) */
-function useStageData(stage: IBPFStage, context: IStageDetailsContextValue): ILoadState {
-  const { loaders, entityName, recordId } = context;
-  const stageEntityMatches = !stage.entityName || stage.entityName === entityName;
-  const canLoadSteps = !!loaders?.loadStageSteps || !!stage.steps;
-
-  const [state, setState] = React.useState<ILoadState>({
-    loading: canLoadSteps,
-    steps: stage.steps ?? null,
-    values: null,
-  });
-
-  React.useEffect(() => {
-    if (!canLoadSteps) return;
-    let cancelled = false;
-
-    const stepsPromise = stage.steps
-      ? Promise.resolve(stage.steps)
-      : loaders!.loadStageSteps!(stage);
-
-    stepsPromise
-      .then(steps => {
-        const needsValues = stageEntityMatches && steps.some(s => s.fieldName) && !!loaders?.loadRecordValues;
-        const valuesPromise = needsValues
-          ? loaders!.loadRecordValues!(entityName, recordId)
-          : Promise.resolve(null);
-        return valuesPromise.then(values => ({ steps, values }));
-      })
-      .then(({ steps, values }) => {
-        if (!cancelled) setState({ loading: false, steps, values });
-      })
-      .catch(() => {
-        if (!cancelled) setState(prev => ({ ...prev, loading: false }));
-      });
-
-    return () => {
-      cancelled = true;
-    };
-    // stage identity is stable per stageId
-  }, [stage.stageId, entityName, recordId]);
-
-  return state;
-}
-
-export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, status, index, total, context }) => {
+export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, status, index, total, context, model }) => {
   const styles = useStyles();
   const { instance, colors, stageAgeWarningDays, now } = context;
-  const { loading, steps, values } = useStageData(stage, context);
+  const { loading, stepsFailed, rows, framing, valuesSource, otherTable, countable, filled, requiredEmpty } = model;
 
   const processStatus = instance.processStatus ?? getProcessStatus(instance.statusCode);
   const isAborted = processStatus === 'aborted';
@@ -237,16 +202,13 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
   const daysInStage = stage.isActive ? getDaysInActiveStage(instance, now) : null;
   const severity = getAgeSeverity(daysInStage, stageAgeWarningDays);
 
-  // ---- Steps / completion ----
-  const stepRows = (steps ?? []).map(step => {
-    const value = step.fieldName && values ? values.get(step.fieldName.toLowerCase()) : undefined;
-    return { step, value };
-  });
-  const canShowCompletion = !!values && stepRows.some(r => r.step.fieldName);
-  const filledCount = stepRows.filter(r => r.value?.hasValue).length;
-  const requiredMissing = stepRows.filter(r => r.step.isRequired && values && !r.value?.hasValue).length;
-  const visibleRows = stepRows.slice(0, MAX_VISIBLE_STEPS);
-  const hiddenCount = stepRows.length - visibleRows.length;
+  // ---- Fields ----
+  const hasValues = valuesSource === 'record' || valuesSource === 'related';
+  // Fill count only where "how much is done" is the question; not for completed/stopped stages
+  const showCount = hasValues && countable > 0 && (framing === 'current' || framing === 'upcoming');
+  const visibleRows = rows.slice(0, MAX_VISIBLE_STEPS);
+  const hiddenCount = rows.length - visibleRows.length;
+  const tableName = otherTable ? toTitle(otherTable) : '';
 
   // ---- Header icon ----
   const headerIcon =
@@ -312,62 +274,66 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
       {status === 'inactive' && <div className={styles.muted}>Not started yet</div>}
 
       {/* Steps */}
-      {(loading || stepRows.length > 0) && (
+      {(loading || stepsFailed || rows.length > 0) && (
         <>
           <Divider />
           <div className={styles.sectionHeader}>
             <span>Steps</span>
-            {canShowCompletion && (
+            {showCount && (
               <span>
-                {filledCount}/{stepRows.length} filled
+                {filled}/{countable} filled
               </span>
             )}
           </div>
           {loading ? (
             <Spinner size="extra-tiny" label="Loading steps…" />
+          ) : stepsFailed ? (
+            <div className={styles.muted} role="status">
+              Couldn&apos;t load this stage&apos;s fields. Hover the stage again to retry.
+            </div>
           ) : (
             <>
-              {canShowCompletion && (
+              {showCount && framing === 'current' && (
                 <ProgressBar
-                  value={stepRows.length ? filledCount / stepRows.length : 0}
+                  value={filled / countable}
                   thickness="medium"
-                  color={requiredMissing > 0 && stage.isActive ? 'warning' : 'success'}
-                  aria-label={`${filledCount} of ${stepRows.length} steps filled`}
+                  color={requiredEmpty.length > 0 ? 'warning' : 'success'}
+                  aria-label={`${filled} of ${countable} fields filled`}
                 />
               )}
+              {valuesSource === 'related' && (
+                <div className={styles.muted}>Values from the related {tableName} record</div>
+              )}
+              {valuesSource === 'unavailable-other-table' && (
+                <div className={styles.muted}>
+                  This stage runs on {tableName}; no {tableName} record is linked to this process yet.
+                </div>
+              )}
+              {valuesSource === 'error' && (
+                <div className={styles.muted} role="status">
+                  Couldn&apos;t load the field values. Hover the stage again to retry.
+                </div>
+              )}
               <ul className={styles.stepList} aria-label="Stage steps">
-                {visibleRows.map(({ step, value }) => {
-                  const done = !!value?.hasValue;
-                  return (
-                    <li key={`${step.fieldName}|${step.displayName}`} className={styles.step}>
-                      {canShowCompletion && done ? (
-                        <CheckmarkCircleFilled className={styles.stepIconDone} aria-label="Filled" />
-                      ) : (
-                        <CircleRegular className={styles.stepIconTodo} aria-label={canShowCompletion ? 'Empty' : undefined} />
-                      )}
-                      <span className={styles.stepName} title={sanitizeText(step.displayName)}>
-                        {sanitizeText(step.displayName)}
-                        {step.isRequired && (
-                          <span className={styles.required} aria-label="required">
-                            *
-                          </span>
-                        )}
-                      </span>
-                      <span className={styles.stepValue}>
-                        {canShowCompletion ? (value?.display ? sanitizeText(value.display) : done ? '✓' : '—') : ''}
-                      </span>
-                    </li>
-                  );
-                })}
+                {visibleRows.map(row => (
+                  <FieldRow key={`${row.step.fieldName}|${row.step.displayName}`} row={row} showState={hasValues} />
+                ))}
               </ul>
               {hiddenCount > 0 && <div className={styles.muted}>+{hiddenCount} more</div>}
-              {requiredMissing > 0 && stage.isActive && (
+              {hasValues && framing === 'current' && requiredEmpty.length > 0 && (
                 <div className={mergeClasses(styles.fact, styles.warning)}>
                   <WarningFilled className={styles.factIcon} />
-                  <span>
-                    {requiredMissing} required {requiredMissing === 1 ? 'field' : 'fields'} missing to move on
-                  </span>
+                  <span>Required to move on: {listNames(requiredEmpty)}</span>
                 </div>
+              )}
+              {hasValues && framing === 'completed' && requiredEmpty.length > 0 && (
+                <div className={styles.muted}>
+                  {requiredEmpty.length} required {requiredEmpty.length === 1 ? 'field is' : 'fields are'} empty on the
+                  record now ({listNames(requiredEmpty)})
+                </div>
+              )}
+              {framing === 'stopped' && (
+                <div className={styles.muted}>The process was stopped at this stage.</div>
               )}
             </>
           )}
@@ -401,5 +367,49 @@ export const StageDetailsCard: React.FC<IStageDetailsCardProps> = ({ stage, stat
         )}
       </div>
     </div>
+  );
+};
+
+function toTitle(logicalName: string): string {
+  return logicalName.charAt(0).toUpperCase() + logicalName.slice(1);
+}
+
+const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, showState }) => {
+  const styles = useStyles();
+  const { step, label, state, display } = row;
+  const name = sanitizeText(label);
+
+  let icon: React.ReactElement;
+  let value: string;
+  if (!showState || state === 'unknown') {
+    icon = <CircleHintRegular className={styles.stepIconTodo} aria-hidden="true" />;
+    value = '';
+  } else if (state === 'filled') {
+    icon = <CheckmarkCircleFilled className={styles.stepIconDone} aria-hidden="true" />;
+    value = display ? sanitizeText(display) : 'Set';
+  } else if (state === 'hidden') {
+    icon = <LockClosedRegular className={styles.stepIconTodo} aria-hidden="true" />;
+    value = 'No access';
+  } else {
+    icon = <CircleRegular className={styles.stepIconTodo} aria-hidden="true" />;
+    value = 'Empty';
+  }
+
+  return (
+    <li className={styles.step}>
+      {icon}
+      <span className={styles.stepName} title={name}>
+        {name}
+        {step.isRequired && (
+          <span className={styles.required}>
+            <span aria-hidden="true">*</span>
+            <span className={styles.visuallyHidden}> (required)</span>
+          </span>
+        )}
+      </span>
+      <span className={styles.stepValue} title={value || undefined}>
+        {value}
+      </span>
+    </li>
   );
 };

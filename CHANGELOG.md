@@ -30,6 +30,16 @@ Existing configurations keep working: new properties default sensibly when absen
 
 ### Fixed
 
+- Stage hover card no longer states things that aren't true: completed stages list values (no fill bar),
+  noting required fields that are empty on the record now; an aborted process says it stopped instead of
+  "missing to move on"; field-secured values show "No access" instead of "Empty"; failed loads say so
+  instead of looking like "no fields" / "all empty"; stages on another table (e.g. Lead in a
+  Lead→Opportunity flow) load values from the record the BPF instance points at; steps hidden in the
+  BPF designer are skipped; steps without their own label use the field's localized display name.
+- Stage hover card is usable by keyboard and screen reader: stages are labelled buttons (one tab stop
+  per row, ←/→/Home/End between stages, Enter toggles), each described by a spoken summary
+  ("2 of 4 fields filled. Required to move on: …"); Escape closes the card however it was opened
+  (WCAG 1.4.13); stage buttons are no longer hidden inside a `role="progressbar"`.
 - Rows stayed on "Loading BPF..." until Refresh or a form reload: in dataset controls the host doesn't
   reliably re-run `updateView()` after `notifyOutputChanged()`. The control now pushes state to the React
   tree through a small store (`utils/viewStore.ts`) and also calls `context.factory.requestRender()`, so

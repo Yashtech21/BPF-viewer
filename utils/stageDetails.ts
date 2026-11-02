@@ -100,12 +100,16 @@ export function parseStageSteps(clientData: string | null | undefined): IStageSt
         asString(node.description) ||
         asString(node.name) ||
         fieldName;
-      push({ fieldName, displayName, isRequired: node.isProcessRequired === true });
+      // Steps hidden in the BPF designer are not shown to users in D365 either
+      if (node.isHidden !== true && control?.isHidden !== true) {
+        push({ fieldName, displayName, isRequired: node.isProcessRequired === true });
+      }
       return; // children already consumed
     }
 
     // A ControlStep outside a StepStep (older/alternate serializations)
     if (cls.startsWith('ControlStep') && typeof node.dataFieldName === 'string') {
+      if (node.isHidden === true) return;
       const fieldName = node.dataFieldName;
       push({
         fieldName,
@@ -276,4 +280,53 @@ export function toFieldValueMap(entity: Record<string, unknown> | null | undefin
     map.set(logicalName.toLowerCase(), { hasValue, display });
   }
   return map;
+}
+
+// ============================================
+// Cross-entity stages
+// ============================================
+
+/** Lookups on a BPF instance row that never point at a stage's record */
+const NON_RECORD_LOOKUPS = new Set([
+  'activestageid', 'processid', 'ownerid', 'owninguser', 'owningteam', 'owningbusinessunit',
+  'createdby', 'createdonbehalfby', 'modifiedby', 'modifiedonbehalfby', 'organizationid',
+  'transactioncurrencyid',
+]);
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Collect the record lookups on a BPF instance row: attribute logical name → record id.
+ * A BPF entity has one lookup per table its stages run on (e.g. `leadid`,
+ * `opportunityid`, or `bpf_<table>id` for custom BPFs).
+ */
+export function collectRelatedRecordIds(row: Record<string, unknown>): Record<string, string> {
+  const related: Record<string, string> = {};
+  for (const key of Object.keys(row)) {
+    const match = /^_(.+)_value$/.exec(key);
+    if (!match) continue;
+    const attribute = match[1].toLowerCase();
+    if (NON_RECORD_LOOKUPS.has(attribute)) continue;
+    const value = row[key];
+    if (typeof value === 'string' && GUID_RE.test(value)) {
+      related[attribute] = value;
+    }
+  }
+  return related;
+}
+
+/**
+ * Find the record a stage on `entityName` refers to, using the BPF instance's
+ * lookups. Prefers an exact `<entity>id` attribute, then a prefixed one
+ * such as `bpf_<entity>id` (custom BPFs). Returns null when ambiguous or absent.
+ */
+export function findRelatedRecordId(
+  related: Record<string, string> | undefined,
+  entityName: string
+): string | null {
+  if (!related) return null;
+  const target = `${entityName.toLowerCase()}id`;
+  if (related[target]) return related[target];
+  const prefixed = Object.keys(related).filter(attr => attr.endsWith(`_${target}`));
+  return prefixed.length === 1 ? related[prefixed[0]] : null;
 }

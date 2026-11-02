@@ -24,7 +24,7 @@ import { BPFError, ErrorCodes } from '../utils/errorMessages';
 import { isValidEntityName, isValidFieldName, isValidGuid, escapeODataValue } from '../utils/sanitize';
 import { createLogger } from '../utils/logger';
 import type { PerfTracker } from '../utils/perfTracker';
-import { parseStageSteps, getProcessStatus, toFieldValueMap } from '../utils/stageDetails';
+import { parseStageSteps, getProcessStatus, toFieldValueMap, collectRelatedRecordIds } from '../utils/stageDetails';
 import type { IStageStep, IFieldValue } from '../types';
 
 const log = createLogger('[BPFService]');
@@ -357,6 +357,7 @@ export class BPFService {
       completedOn: str('completedon'),
       activeStageStartedOn: str('activestagestartedon'),
       modifiedByName: str('_modifiedby_value@OData.Community.Display.V1.FormattedValue'),
+      relatedRecordIds: collectRelatedRecordIds(bpfRecord),
     };
   }
 
@@ -731,6 +732,7 @@ export class BPFService {
    * Resolve the steps (fields) of a stage for the hover card.
    * Uses steps parsed from clientdata when the stage already carries them,
    * otherwise fetches processstage.clientdata once per stage (cached).
+   * Rejects when the definition can't be loaded.
    */
   public getStageSteps(stage: IBPFStage): Promise<IStageStep[]> {
     if (stage.steps) {
@@ -750,9 +752,10 @@ export class BPFService {
       .then(entity => parseStageSteps((entity as IProcessStageResponse).clientdata))
       .catch(error => {
         log.warn(`Failed to load steps for stage ${stage.stageId}:`, error);
-        // Don't cache failures — allow a retry on next hover
+        // Don't cache failures — allow a retry on next hover. Rethrow so the
+        // card can say it couldn't load, instead of claiming "no fields".
         this.stageStepsCache.delete(stage.stageId);
-        return [] as IStageStep[];
+        throw error;
       });
 
     this.stageStepsCache.set(stage.stageId, request);
@@ -762,6 +765,7 @@ export class BPFService {
   /**
    * Load a record's attribute values so the hover card can show which
    * stage fields are filled in. Cached briefly per record.
+   * Rejects on failure (invalid input resolves to an empty map).
    */
   public getRecordValues(entityName: string, recordId: string): Promise<Map<string, IFieldValue>> {
     if (!isValidEntityName(entityName) || !isValidGuid(recordId)) {
@@ -781,8 +785,9 @@ export class BPFService {
       .then(entity => toFieldValueMap(entity as Record<string, unknown>) as Map<string, IFieldValue>)
       .catch(error => {
         log.warn(`Failed to load values for ${entityName} ${recordId}:`, error);
+        // Rethrow: an empty map would read as "every field is empty"
         this.recordValuesCache.delete(key);
-        return new Map<string, IFieldValue>();
+        throw error;
       });
 
     this.recordValuesCache.set(key, { promise, timestamp: Date.now() });

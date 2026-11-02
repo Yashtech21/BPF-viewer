@@ -23,6 +23,7 @@ import {
   NavigationTarget,
   Density,
   IStageDetailsLoaders,
+  IFieldInfo,
 } from './types';
 import {
   resolveColors,
@@ -35,6 +36,7 @@ import { logger } from './utils/logger';
 import { createPerfTracker } from './utils/perfTracker';
 import { runQueue } from './utils/taskQueue';
 import { ViewStore } from './utils/viewStore';
+import { readAttributeInfo } from './utils/fieldMetadata';
 
 /**
  * How many records are fetched in parallel. Rows still update one by one as
@@ -60,6 +62,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private fetchedRecordIds: Set<string> = new Set();
   private lastDatasetVersion: string = '';
   private entityDisplayNameCache: Map<string, string> = new Map();
+  /** entity|field -> field metadata (display name, field security) */
+  private fieldInfoCache: Map<string, IFieldInfo> = new Map();
 
   // Request cancellation support
   private abortController: AbortController | null = null;
@@ -99,6 +103,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     this.loaders = {
       loadStageSteps: (stage) => service.getStageSteps(stage),
       loadRecordValues: (entityName, recordId) => service.getRecordValues(entityName, recordId),
+      loadFieldInfo: (entityName, fieldNames) => this.getFieldInfo(entityName, fieldNames),
     };
 
     // Parse BPF configuration
@@ -456,6 +461,35 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     this.entityDisplayNameCache.set(entityName, fallback);
     return fallback;
+  }
+
+  /**
+   * Field metadata for stage steps: localized display names and whether
+   * field-level security applies. Uses the platform's metadata cache
+   * (context.utils.getEntityMetadata); fields it can't describe are omitted.
+   */
+  private async getFieldInfo(entityName: string, fieldNames: string[]): Promise<Map<string, IFieldInfo>> {
+    const result = new Map<string, IFieldInfo>();
+    const names = [...new Set(fieldNames.map(f => f.toLowerCase()).filter(Boolean))];
+    const missing = names.filter(f => !this.fieldInfoCache.has(`${entityName}|${f}`));
+
+    if (missing.length > 0 && isValidEntityName(entityName) && this.context.utils?.getEntityMetadata) {
+      try {
+        const metadata = await this.context.utils.getEntityMetadata(entityName, missing);
+        for (const field of missing) {
+          const info = readAttributeInfo(metadata, field);
+          if (info) this.fieldInfoCache.set(`${entityName}|${field}`, info);
+        }
+      } catch (e) {
+        logger.warn(`Field metadata unavailable for ${entityName}:`, e);
+      }
+    }
+
+    for (const field of names) {
+      const info = this.fieldInfoCache.get(`${entityName}|${field}`);
+      if (info) result.set(field, info);
+    }
+    return result;
   }
 
   /**

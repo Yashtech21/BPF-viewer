@@ -16,6 +16,7 @@ import { CheckmarkCircleFilled, CircleRegular, DismissCircleFilled } from '@flue
 import type { IBPFDesignProps } from '../../types';
 import { useBPFDesignHelpers } from './hooks/useBPFDesignHelpers';
 import { StageHoverCard } from '../stageDetails/StageHoverCard';
+import { HiddenProgress, useTrackProps } from './shared/StageTrackSemantics';
 import { useStageDetailsContext } from '../stageDetails/StageDetailsContext';
 import { getStageLabel } from '../../utils/themeUtils';
 import { formatDaysShort, getAgeSeverity, getDaysInActiveStage, getProcessStatus } from '../../utils/stageDetails';
@@ -130,14 +131,11 @@ const ModernDesignComponent: React.FC<IBPFDesignProps> = ({
   const daysInStage = details ? getDaysInActiveStage(details.instance, details.now) : null;
   const severity = getAgeSeverity(daysInStage, details?.stageAgeWarningDays);
 
-  return (
-    <div
-      className={styles.container}
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={a11yMetadata.totalCount}
-      aria-valuenow={a11yMetadata.completedCount}
-      aria-label={`Business process flow: ${a11yMetadata.completedCount} of ${a11yMetadata.totalCount} stages complete${
+  const progress = {
+    min: 0,
+    max: a11yMetadata.totalCount,
+    now: a11yMetadata.completedCount,
+    label: `Business process flow: ${a11yMetadata.completedCount} of ${a11yMetadata.totalCount} stages complete${
         a11yMetadata.activeStage
           ? `. Current stage: ${getStageLabel(
               a11yMetadata.activeStage.stageName,
@@ -145,8 +143,16 @@ const ModernDesignComponent: React.FC<IBPFDesignProps> = ({
               displayMode
             )}`
           : ''
-      }`}
+      }`,
+  };
+  const trackProps = useTrackProps(progress);
+
+  return (
+    <div
+      className={styles.container}
+      {...trackProps}
     >
+      <HiddenProgress progress={progress} />
       {stageMetadata.map(({ stage, status, stageColor, label, shouldPulse }, index) => {
         const isActive = status === 'active';
         const stoppedHere = isAborted && isActive;
