@@ -839,7 +839,9 @@ describe('BPFViewerPlus', () => {
       const rows = (ctx: ComponentFramework.Context<IInputs>) =>
         control.updateView(ctx).props.records as Array<{ recordId: string; isLoading: boolean; error: string | null; bpfInstance: unknown }>;
 
-      it('renders every row as loading first, then fetches one record at a time', async () => {
+      const strict = expect.objectContaining({ throwOnError: true, signal: expect.anything() });
+
+      it('renders every row as loading first, then updates each row as its own data arrives', async () => {
         const { spy, pending } = deferredSpy();
         const ctx = ctxFor(ids);
 
@@ -852,27 +854,25 @@ describe('BPFViewerPlus', () => {
         expect(initial.every(r => r.isLoading)).toBe(true);
         expect(notifyOutputChanged).toHaveBeenCalled();
 
-        // Concurrency 1: only the first record has been requested
-        expect(spy).toHaveBeenCalledTimes(1);
-        expect(spy).toHaveBeenCalledWith(ids[0], 'opportunity', expect.anything(), { throwOnError: true });
+        // 3 records < concurrency limit: all requested up front, in order
+        expect(spy.mock.calls.map(c => c[0])).toEqual(ids);
+        expect(spy).toHaveBeenCalledWith(ids[0], 'opportunity', expect.anything(), strict);
 
-        // First record arrives -> only its row updates, the next fetch starts
+        // Responses arrive out of order -> only that row updates
         const notifiesBefore = notifyOutputChanged.mock.calls.length;
-        pending.get(ids[0])!.resolve(instanceFor(ids[0]));
+        pending.get(ids[1])!.resolve(instanceFor(ids[1]));
         await flush();
 
         let current = rows(ctx);
-        expect(current[0]).toMatchObject({ isLoading: false, bpfInstance: expect.objectContaining({ processId: 'bpf-1' }) });
-        expect(current[1].isLoading).toBe(true);
+        expect(current[1]).toMatchObject({ isLoading: false, bpfInstance: expect.objectContaining({ processId: 'bpf-2' }) });
+        expect(current[0].isLoading).toBe(true);
         expect(current[2].isLoading).toBe(true);
         expect(control.updateView(ctx).props.isLoading).toBe(true);
         expect(notifyOutputChanged.mock.calls.length).toBeGreaterThan(notifiesBefore);
-        expect(spy).toHaveBeenCalledTimes(2);
-        expect(spy).toHaveBeenLastCalledWith(ids[1], 'opportunity', expect.anything(), { throwOnError: true });
 
-        pending.get(ids[1])!.resolve(null);
+        pending.get(ids[0])!.resolve(null);
         await flush();
-        expect(rows(ctx)[1]).toMatchObject({ isLoading: false, bpfInstance: null, error: null });
+        expect(rows(ctx)[0]).toMatchObject({ isLoading: false, bpfInstance: null, error: null });
         expect(control.updateView(ctx).props.isLoading).toBe(true);
 
         pending.get(ids[2])!.resolve(instanceFor(ids[2]));
@@ -883,6 +883,29 @@ describe('BPFViewerPlus', () => {
         expect(current.every(r => !r.isLoading)).toBe(true);
         expect(control.updateView(ctx).props.isLoading).toBe(false);
         expect(spy).toHaveBeenCalledTimes(3);
+      });
+
+      it('never has more than 4 requests in flight', async () => {
+        const many = Array.from({ length: 7 }, (_, i) => `00000000-0000-0000-0000-00000000001${i}`);
+        const { spy, pending } = deferredSpy();
+        const ctx = ctxFor(many);
+
+        control.updateView(ctx);
+        await flush();
+        expect(spy).toHaveBeenCalledTimes(4);
+
+        // Finishing one frees one slot
+        pending.get(many[2])!.resolve(null);
+        await flush();
+        expect(spy).toHaveBeenCalledTimes(5);
+        expect(spy).toHaveBeenLastCalledWith(many[4], 'opportunity', expect.anything(), strict);
+
+        many.forEach(id => pending.get(id)?.resolve(null));
+        await flush();
+        many.forEach(id => pending.get(id)?.resolve(null));
+        await flush();
+        expect(spy).toHaveBeenCalledTimes(7);
+        expect(control.updateView(ctx).props.isLoading).toBe(false);
       });
 
       it('marks only the failing row with an error and keeps going', async () => {
@@ -921,29 +944,35 @@ describe('BPFViewerPlus', () => {
         await flush();
 
         expect(spy).toHaveBeenCalledTimes(1);
-        expect(spy).toHaveBeenCalledWith(ids[1], 'opportunity', expect.anything(), { throwOnError: true });
+        expect(spy).toHaveBeenCalledWith(ids[1], 'opportunity', expect.anything(), strict);
         expect(rows(reordered).find(r => r.recordId === ids[1])?.error).toBeNull();
       });
+
+      const six = Array.from({ length: 6 }, (_, i) => `00000000-0000-0000-0000-00000000002${i}`);
 
       it('stops the old queue when a newer dataset arrives', async () => {
         const { spy, pending } = deferredSpy();
         const other = '00000000-0000-0000-0000-000000000009';
 
-        control.updateView(ctxFor(ids));
+        control.updateView(ctxFor(six));
         await flush();
-        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledTimes(4); // six[4], six[5] still queued
 
         // New view with a different record
         const ctx2 = ctxFor([other]);
         control.updateView(ctx2);
         await flush();
 
-        // Old in-flight request settles late: must not touch the new rows or start ids[1]
-        pending.get(ids[0])!.resolve(instanceFor(ids[0]));
+        // The old in-flight requests were cancelled via the signal
+        const oldSignal = (spy.mock.calls[0][3] as { signal: AbortSignal }).signal;
+        expect(oldSignal.aborted).toBe(true);
+
+        // Old requests settle late: must not touch the new rows or start the queued ones
+        six.slice(0, 4).forEach(id => pending.get(id)!.resolve(instanceFor(id)));
         await flush();
 
         const requested = spy.mock.calls.map(c => c[0]);
-        expect(requested).toEqual([ids[0], other]);
+        expect(requested).toEqual([...six.slice(0, 4), other]);
         expect(rows(ctx2).map(r => r.recordId)).toEqual([other]);
         expect(rows(ctx2)[0].isLoading).toBe(true);
         expect(control.updateView(ctx2).props.isLoading).toBe(true);
@@ -955,14 +984,14 @@ describe('BPFViewerPlus', () => {
 
       it('stops the queue on destroy', async () => {
         const { spy, pending } = deferredSpy();
-        control.updateView(ctxFor(ids));
+        control.updateView(ctxFor(six));
         await flush();
 
         control.destroy();
-        pending.get(ids[0])!.resolve(null);
+        six.slice(0, 4).forEach(id => pending.get(id)!.resolve(null));
         await flush();
 
-        expect(spy).toHaveBeenCalledTimes(1);
+        expect(spy).toHaveBeenCalledTimes(4);
       });
     });
 

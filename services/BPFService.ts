@@ -35,6 +35,10 @@ const REQUEST_TIMEOUT_MS = 30 * 1000;
 // Cache timeout (5 minutes)
 const CACHE_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Stage category labels are cosmetic: give up quickly and retry later
+const CATEGORY_LABELS_TIMEOUT_MS = 5 * 1000;
+const CATEGORY_LABELS_FAILURE_TTL_MS = 60 * 1000;
+
 /**
  * Option set metadata response from Dataverse
  */
@@ -91,6 +95,8 @@ export class BPFService {
   private pendingRequests: Map<string, Promise<IBPFInstance | null>> = new Map();
   private categoryLabelsCache: Map<number, string> | null = null;
   private categoryLabelsCacheTime = 0;
+  private categoryLabelsFailed = false;
+  private categoryLabelsPending: Promise<Map<number, string>> | null = null;
   private activePathCache: Map<string, { stages: IBPFStage[]; timestamp: number }> = new Map();
   private stageStepsCache: Map<string, Promise<IStageStep[]>> = new Map();
   private recordValuesCache: Map<string, { promise: Promise<Map<string, IFieldValue>>; timestamp: number }> = new Map();
@@ -485,28 +491,39 @@ export class BPFService {
    * @param signal - Optional AbortSignal for request cancellation
    * @returns Map of category number to localized label
    */
-  private async getStageCategoryLabels(signal?: AbortSignal): Promise<Map<number, string>> {
-    // Check cache (metadata rarely changes, cache for 5 minutes)
-    if (this.categoryLabelsCache && Date.now() - this.categoryLabelsCacheTime < CACHE_TIMEOUT_MS) {
-      return this.categoryLabelsCache;
+  private getStageCategoryLabels(_signal?: AbortSignal): Promise<Map<number, string>> {
+    // Check cache (metadata rarely changes, cache for 5 minutes; failures for 1 minute)
+    const ttl = this.categoryLabelsFailed ? CATEGORY_LABELS_FAILURE_TTL_MS : CACHE_TIMEOUT_MS;
+    if (this.categoryLabelsCache && Date.now() - this.categoryLabelsCacheTime < ttl) {
+      return Promise.resolve(this.categoryLabelsCache);
     }
 
-    // Check if cancelled
-    if (signal?.aborted) {
-      throw new Error('Request cancelled');
+    // Share one in-flight request between all records. It is deliberately not
+    // tied to a per-dataset AbortSignal: it's global metadata, and cancelling it
+    // mid-flight used to cache an empty result.
+    if (this.categoryLabelsPending) {
+      return this.categoryLabelsPending;
     }
 
+    this.categoryLabelsPending = this.loadStageCategoryLabels().finally(() => {
+      this.categoryLabelsPending = null;
+    });
+    return this.categoryLabelsPending;
+  }
+
+  private async loadStageCategoryLabels(): Promise<Map<number, string>> {
     try {
       // Fetch attribute metadata for stagecategory field
       // Using Web API: GET [Organization URI]/api/data/v9.2/EntityDefinitions(LogicalName='processstage')/Attributes(LogicalName='stagecategory')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata?$select=LogicalName&$expand=OptionSet
+      // Labels are cosmetic (stage names are the fallback), so never let this
+      // call hold up a record for long.
       const response = await this.fetchWithTimeout(
         this.webApi.retrieveRecord(
           'EntityDefinitions(LogicalName=\'processstage\')/Attributes(LogicalName=\'stagecategory\')/Microsoft.Dynamics.CRM.PicklistAttributeMetadata',
           '',
           '?$select=LogicalName&$expand=OptionSet'
         ),
-        REQUEST_TIMEOUT_MS,
-        signal
+        CATEGORY_LABELS_TIMEOUT_MS
       ) as AttributeMetadataResponse;
 
       const categoryMap = new Map<number, string>();
@@ -524,17 +541,19 @@ export class BPFService {
       // Cache the results
       this.categoryLabelsCache = categoryMap;
       this.categoryLabelsCacheTime = Date.now();
+      this.categoryLabelsFailed = false;
 
       return categoryMap;
 
     } catch (error) {
       log.warn('Failed to fetch category labels from metadata, using stage names as fallback:', error);
 
-      // Return empty map - fallback to stage name will be used
-      if (!this.categoryLabelsCache) {
-        this.categoryLabelsCache = new Map<number, string>();
-        this.categoryLabelsCacheTime = Date.now();
+      // Return the last good map (or an empty one); retry after a short TTL
+      if (!this.categoryLabelsCache || this.categoryLabelsFailed) {
+        this.categoryLabelsCache = this.categoryLabelsCache ?? new Map<number, string>();
+        this.categoryLabelsFailed = true;
       }
+      this.categoryLabelsCacheTime = Date.now();
 
       return this.categoryLabelsCache;
     }
@@ -618,7 +637,7 @@ export class BPFService {
     recordId: string,
     entityName: string,
     config: IBPFConfiguration,
-    options: { throwOnError?: boolean } = {}
+    options: { throwOnError?: boolean; signal?: AbortSignal; perf?: PerfTracker } = {}
   ): Promise<IBPFInstance | null> {
     const throwOnError = options.throwOnError === true;
 
@@ -629,7 +648,7 @@ export class BPFService {
     }
 
     // Create the request
-    const request = this.fetchSingleRecord(recordId, config, throwOnError);
+    const request = this.fetchSingleRecord(recordId, config, throwOnError, options.signal, options.perf);
     this.pendingRequests.set(pendingKey, request);
 
     try {
@@ -646,20 +665,26 @@ export class BPFService {
   private async fetchSingleRecord(
     recordId: string,
     config: IBPFConfiguration,
-    throwOnError = false
+    throwOnError = false,
+    signal?: AbortSignal,
+    perf?: PerfTracker
   ): Promise<IBPFInstance | null> {
     let lastError: unknown = null;
     let anySucceeded = false;
 
     for (const bpfDef of config.bpfs) {
       try {
-        const results = await this.fetchBPFInstancesBatched([recordId], bpfDef);
+        const label = `fetchBPF:${bpfDef.bpfEntitySchemaName}`;
+        perf?.mark(label);
+        const results = await this.fetchBPFInstancesBatched([recordId], bpfDef, signal, perf);
+        perf?.measure(label);
         anySucceeded = true;
         const instance = results.get(recordId);
         if (instance) {
           return instance;
         }
       } catch (error) {
+        if (signal?.aborted) throw error; // cancelled: don't try the next definition
         lastError = error;
         log.warn(`Error fetching single record:`, error);
       }
@@ -775,6 +800,7 @@ export class BPFService {
     this.pendingRequests.clear();
     this.categoryLabelsCache = null;
     this.categoryLabelsCacheTime = 0;
+    this.categoryLabelsFailed = false;
     this.activePathCache.clear();
   }
 

@@ -37,6 +37,9 @@ Existing configurations keep working: new properties default sensibly when absen
   record at a time (queue, concurrency 1) and each row updates as soon as its data arrives. A failure marks
   only that row (and it is retried on the next refresh); the global loading flag clears when the queue drains.
   Stale queues stop when the view changes or the control is destroyed.
+- Record fetches run 4 at a time (rows still update individually); the stage-category label lookup is
+  shared across records, capped at 5s (was 30s) and retried after 1 minute on failure; cancelled
+  requests stop immediately; per-record timing tables in debug mode (`sessionStorage BPF_DEBUG=true`).
 - `BPFService.getBPFDataForRecord` accepts `{ throwOnError: true }` to surface failures instead of returning null
   (default behaviour unchanged).
 - Pulse animation is now a soft ring/glow instead of an opacity blink, and is disabled under *prefers-reduced-motion*.

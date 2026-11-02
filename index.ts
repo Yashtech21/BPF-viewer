@@ -35,8 +35,12 @@ import { logger } from './utils/logger';
 import { createPerfTracker } from './utils/perfTracker';
 import { runQueue } from './utils/taskQueue';
 
-/** How many records are fetched in parallel (1 = strictly one at a time) */
-const BPF_FETCH_CONCURRENCY = 1;
+/**
+ * How many records are fetched in parallel. Rows still update one by one as
+ * each finishes; 1 = strictly sequential (total time = sum of every record's
+ * round trips), higher values overlap the network waits.
+ */
+const BPF_FETCH_CONCURRENCY = 4;
 
 export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, IOutputs> {
   private context: ComponentFramework.Context<IInputs>;
@@ -349,14 +353,22 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     await runQueue(
       newRecordIds,
       BPF_FETCH_CONCURRENCY,
-      async (recordId) => {
+      async (recordId, index) => {
         let update: Partial<IRecordBPFData>;
+        // Per-record timing table (debug mode only: sessionStorage BPF_DEBUG=true)
+        const recordPerf = createPerfTracker(`record ${index + 1}/${newRecordIds.length} (${recordId})`);
         try {
-          const bpfInstance = await service.getBPFDataForRecord(recordId, entityName, config, { throwOnError: true });
+          const bpfInstance = await service.getBPFDataForRecord(recordId, entityName, config, {
+            throwOnError: true,
+            signal,
+            perf: recordPerf,
+          });
+          recordPerf.summary();
           if (isStale()) return;
           this.fetchedRecordIds.add(recordId);
           update = { bpfInstance, isLoading: false, error: null };
         } catch (e) {
+          recordPerf.summary();
           if (isStale()) return;
           logger.error(`Failed to fetch BPF data for record ${recordId}:`, e);
           // Not cached in fetchedRecordIds, so a refresh retries this row

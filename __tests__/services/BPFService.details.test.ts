@@ -147,6 +147,101 @@ describe('BPFService stage details', () => {
     });
   });
 
+  describe('stage category labels (performance guards)', () => {
+    const instanceRow = {
+      businessprocessflowinstanceid: INSTANCE_ID,
+      name: 'Opportunity Sales Process',
+      _opportunityid_value: RECORD_ID,
+      _activestageid_value: STAGE_ID,
+      traversedpath: '',
+      statuscode: 1,
+    };
+
+    function mockActivePath() {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ value: [{ processstageid: STAGE_ID, stagename: 'Qualify', stagecategory: 0 }] }),
+      }) as unknown as typeof fetch;
+    }
+
+    const labelCalls = () =>
+      (webApi.retrieveRecord as jest.Mock).mock.calls.filter(c => String(c[0]).includes('stagecategory')).length;
+
+    it('gives up on a hanging label lookup after 5s instead of 30s', async () => {
+      jest.useFakeTimers();
+      try {
+        webApi.retrieveRecord = jest.fn().mockReturnValue(new Promise(() => { /* never resolves */ }));
+        webApi.retrieveMultipleRecords.mockResolvedValue({ entities: [instanceRow] });
+        mockActivePath();
+
+        let done = false;
+        const result = service.getBPFDataForRecord(RECORD_ID, 'opportunity', config, { throwOnError: true })
+          .then(r => { done = true; return r; });
+
+        await jest.advanceTimersByTimeAsync(4900);
+        expect(done).toBe(false);
+        await jest.advanceTimersByTimeAsync(200);
+        expect(done).toBe(true);
+
+        // Falls back to the stage name as category label
+        const instance = await result;
+        expect(instance?.stages[0].stageCategoryName).toBe('Qualify');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('shares one in-flight label request across concurrent records', async () => {
+      const second = '00000000-0000-0000-0000-000000000002';
+      webApi.retrieveMultipleRecords.mockImplementation((_e: string, q: string) =>
+        Promise.resolve({ entities: [{ ...instanceRow, _opportunityid_value: q.includes(second) ? second : RECORD_ID }] })
+      );
+      mockActivePath();
+
+      await Promise.all([
+        service.getBPFDataForRecord(RECORD_ID, 'opportunity', config),
+        service.getBPFDataForRecord(second, 'opportunity', config),
+      ]);
+
+      expect(labelCalls()).toBe(1);
+    });
+
+    it('retries a failed label lookup after the short failure TTL', async () => {
+      jest.useFakeTimers();
+      try {
+        webApi.retrieveRecord = jest.fn().mockRejectedValue(new Error('metadata 404'));
+        webApi.retrieveMultipleRecords.mockResolvedValue({ entities: [instanceRow] });
+        mockActivePath();
+
+        await service.getBPFDataForRecord(RECORD_ID, 'opportunity', config);
+        await service.getBPFDataForRecord(RECORD_ID, 'opportunity', config);
+        expect(labelCalls()).toBe(1); // cached failure, no retry storm
+
+        jest.setSystemTime(Date.now() + 61 * 1000);
+        await service.getBPFDataForRecord(RECORD_ID, 'opportunity', config);
+        expect(labelCalls()).toBe(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not try further BPF definitions once the request is cancelled', async () => {
+      const twoBpfs: IBPFConfiguration = {
+        bpfs: [
+          { bpfEntitySchemaName: 'opportunitysalesprocess', lookupFieldSchemaName: '_opportunityid_value' },
+          { bpfEntitySchemaName: 'leadtoopportunitysalesprocess', lookupFieldSchemaName: '_opportunityid_value' },
+        ],
+      };
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        service.getBPFDataForRecord(RECORD_ID, 'opportunity', twoBpfs, { throwOnError: true, signal: controller.signal })
+      ).rejects.toThrow('Request cancelled');
+      expect(webApi.retrieveMultipleRecords).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getStageSteps', () => {
     it('returns steps already on the stage without a request', async () => {
       const steps = [{ fieldName: 'name', displayName: 'Topic', isRequired: true }];
