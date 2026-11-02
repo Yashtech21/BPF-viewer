@@ -54,6 +54,8 @@ Existing configurations keep working: new properties default sensibly when absen
 
 ### Changed
 
+- Hovering a stage shows the hand pointer instead of the question-mark (help) cursor; clicking a stage
+  toggles its details card. (1.2.3)
 - **New control identity** so it can be installed beside the managed upstream v1.0.0:
   namespace `IWS`, constructor `BPFViewerPlus`, solution `BPFViewerPlus`, publisher `IWSPublisher` (prefix `iws`).
   Project file and strings renamed to `BPFViewerPlus.pcfproj` / `strings/BPFViewerPlus.1033.resx`.

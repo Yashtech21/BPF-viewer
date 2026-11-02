@@ -38,7 +38,8 @@ import { formatDays, getStageTiming } from '../../utils/stageDetails';
 
 const useStyles = makeStyles({
   trigger: {
-    cursor: 'help',
+    // Hand: clicking a stage toggles its details card
+    cursor: 'pointer',
     outlineStyle: 'none',
     ':focus-visible': {
       outlineWidth: '2px',
