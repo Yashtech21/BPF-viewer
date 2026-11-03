@@ -6,7 +6,7 @@
 
 import * as React from 'react';
 import { FluentProvider, webLightTheme, makeStyles, tokens, Spinner, Button, Theme } from '@fluentui/react-components';
-import { ArrowClockwiseRegular, ErrorCircleRegular } from '@fluentui/react-icons';
+import { ArrowClockwiseRegular, ErrorCircleRegular, InfoRegular, WarningRegular } from '@fluentui/react-icons';
 import { IBPFViewerProps } from '../types';
 import { BPFRow } from './BPFRow';
 import {
@@ -49,6 +49,25 @@ const useStyles = makeStyles({
   },
   errorIcon: {
     fontSize: '32px',
+  },
+  noticeIcon: {
+    fontSize: '24px',
+    marginBottom: '8px',
+    color: tokens.colorNeutralForeground3,
+  },
+  noticeBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    padding: '6px 14px',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorPaletteMarigoldForeground2,
+    backgroundColor: tokens.colorPaletteYellowBackground1,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  noticeBarIcon: {
+    fontSize: '16px',
+    flexShrink: 0,
   },
   emptyContainer: {
     display: 'flex',
@@ -106,6 +125,7 @@ const BPFViewerInner: React.FC<IBPFViewerProps & { containerRef: React.RefObject
   onNavigate,
   onRefresh,
   loaders,
+  notice,
   now: nowProp,
   containerRef,
 }) => {
@@ -163,11 +183,12 @@ const BPFViewerInner: React.FC<IBPFViewerProps & { containerRef: React.RefObject
     );
   }
 
-  // Empty state
+  // Empty state (a notice explains why, when there is one)
   if (records.length === 0) {
     return (
       <div className={styles.emptyContainer} role="status">
-        <div>No records to display</div>
+        {notice && <InfoRegular className={styles.noticeIcon} aria-hidden="true" />}
+        <div>{notice || 'No records to display'}</div>
       </div>
     );
   }
@@ -175,6 +196,12 @@ const BPFViewerInner: React.FC<IBPFViewerProps & { containerRef: React.RefObject
   // Records list
   return (
     <>
+      {notice && (
+        <div className={styles.noticeBar} role="status">
+          <WarningRegular className={styles.noticeBarIcon} aria-hidden="true" />
+          <span>{notice}</span>
+        </div>
+      )}
       {settings.showToolbar && (
         <BPFToolbar
           view={view}
@@ -280,6 +307,7 @@ export const BPFViewer: React.FC<IBPFViewerWithProviderProps> = ({
         records: live.records,
         isLoading: live.isLoading || live.datasetLoading,
         error: live.error,
+        notice: live.notice ?? null,
       }
     : viewProps;
 

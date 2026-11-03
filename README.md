@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.0-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.4.1-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" />
   <a href="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/ci.yml"><img src="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/cd.yml"><img src="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/cd.yml/badge.svg" alt="CD" /></a>
@@ -216,10 +216,16 @@ Placeholders are replaced with the **saved** values of the form's record:
 | `{id}` | The form record's id |
 | `{fieldname}` (e.g. `{new_recruitsource}`, `{ownerid}`, `{createdby}`) | That field's value on the form record: GUID for lookups/owner, number for option sets, `1`/`0` for yes/no |
 
-Values are XML-escaped. If a placeholder is empty on the record, the subgrid shows
+Values are XML-escaped and always read fresh, so a value the user just saved is used on the next refresh.
+Multi-select values are expanded into `<value>` elements for `in`, `not-in`, `contain-values` and
+`not-contain-values` conditions. If a placeholder is empty on the record, the subgrid shows the notice
 "No records to show: <Field> is empty on this record." instead of running the query. A query without
 `top` or `count` is capped at 250 rows. The query's entity should be the table your BPF configuration
-points at (e.g. `opportunity`), so stages resolve.
+points at (e.g. `opportunity`); otherwise a warning is shown above the rows, because stages may not resolve.
+
+Set the template on the **form subgrid's** control properties. Properties belong to each placement:
+views and Related-tab grids use the table-level control configuration and are unaffected, unless you also
+paste a template there (it is then applied wherever a record is in context, e.g. Related-tab grids).
 
 **Records with the same Recruit Source as the current record** (excluding itself):
 

@@ -849,7 +849,8 @@ export class BPFService {
   public getRecordColumns(
     entityName: string,
     recordId: string,
-    columns: Array<{ field: string; select: string; attributeType?: string }>
+    columns: Array<{ field: string; select: string; attributeType?: string }>,
+    options: { fresh?: boolean } = {}
   ): Promise<Map<string, IFieldValue>> {
     const failedAll = () => new Map(columns.map(c => [c.field.toLowerCase(), { hasValue: false, display: null, failed: true }]));
     const id = normGuid(recordId);
@@ -858,7 +859,9 @@ export class BPFService {
     }
 
     const key = `${entityName}:${id}:${columns.map(c => c.select.toLowerCase()).sort().join(',')}`;
-    const cached = this.recordValuesCache.get(key);
+    // `fresh`: values that drive a query (form-subgrid placeholders) must reflect
+    // the record as just saved, so they bypass the cache entirely
+    const cached = options.fresh ? undefined : this.recordValuesCache.get(key);
     if (cached && Date.now() - cached.timestamp < RECORD_VALUES_CACHE_MS) {
       return cached.promise;
     }
@@ -927,7 +930,7 @@ export class BPFService {
       return result;
     });
 
-    this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
+    if (!options.fresh) this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
     return promise;
   }
 

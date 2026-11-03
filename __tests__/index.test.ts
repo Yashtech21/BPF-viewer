@@ -1166,7 +1166,9 @@ describe('BPFViewerPlus', () => {
       control.updateView(context);
       await flush();
       expect(retrieveMultiple).not.toHaveBeenCalled();
-      expect(props().error).toBe('No records to show: Recruit Source is empty on this record.');
+      // A normal state, shown as a notice (no error, no Retry)
+      expect(props().notice).toBe('No records to show: Recruit Source is empty on this record.');
+      expect(props().error).toBeNull();
       expect(props().records).toEqual([]);
     });
 
@@ -1177,6 +1179,100 @@ describe('BPFViewerPlus', () => {
       await flush();
       expect(retrieveMultiple).not.toHaveBeenCalled();
       expect(props().error).toMatch(/FetchXML filter isn't valid/);
+    });
+
+    it('re-reads the form record on every refresh: a value saved on the form is used right away', async () => {
+      const { retrieveRecord, retrieveMultiple } = setup();
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(decodeURIComponent(String(retrieveMultiple.mock.calls[0][1]))).toContain('value="100000001"');
+
+      // The user changes Recruit Source and saves; D365 refreshes the subgrid
+      retrieveRecord.mockResolvedValue({ new_recruitsource: 100000002, _ownerid_value: OWNER });
+      const records = context.parameters.records as unknown as Record<string, unknown>;
+      records.loading = true;
+      control.updateView(context);
+      records.loading = false;
+      control.updateView(context);
+      await flush();
+
+      expect(retrieveRecord).toHaveBeenCalledTimes(2);
+      expect(decodeURIComponent(String(retrieveMultiple.mock.calls[1][1]))).toContain('value="100000002"');
+    });
+
+    it('clears the notice once the empty field is filled and saved', async () => {
+      const { retrieveRecord } = setup({ formValues: { new_recruitsource: null, _ownerid_value: OWNER } });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(props().notice).toMatch(/Recruit Source is empty/);
+
+      retrieveRecord.mockResolvedValue({ new_recruitsource: 100000001, _ownerid_value: OWNER });
+      const records = context.parameters.records as unknown as Record<string, unknown>;
+      records.loading = true;
+      control.updateView(context);
+      records.loading = false;
+      control.updateView(context);
+      await flush();
+      expect(props().notice).toBeNull();
+      expect((props().records as unknown[]).length).toBe(2);
+    });
+
+    it('re-runs when the template itself changes', async () => {
+      const { retrieveMultiple } = setup();
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      (context.parameters as unknown as Record<string, unknown>).subgridFetchXml = {
+        raw: '<fetch top="1"><entity name="opportunity"/></fetch>',
+      };
+      control.updateView(context);
+      await flush();
+      expect(retrieveMultiple).toHaveBeenCalledTimes(2);
+      expect(decodeURIComponent(String(retrieveMultiple.mock.calls[1][1]))).toContain('top="1"');
+    });
+
+    it('warns (without blocking) when the query returns another table than the BPF configuration', async () => {
+      setup({ template: '<fetch><entity name="account"><attribute name="name"/></entity></fetch>' });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(props().notice).toMatch(/returns account records, but the BPF configuration is for opportunity/);
+      expect(props().error).toBeNull();
+    });
+
+    it('expands a multi-select placeholder into <value> elements for list operators', async () => {
+      const { retrieveMultiple } = setup({
+        template: '<fetch><entity name="opportunity"><filter><condition attribute="new_skills" operator="contain-values" value="{new_skills}"/></filter></entity></fetch>',
+        formValues: { new_skills: '100000000,100000002' },
+      });
+      (context.utils as unknown as { getEntityMetadata: Mock }).getEntityMetadata = jest.fn().mockImplementation(
+        async (_entity: string, attrs?: string[]) =>
+          attrs
+            ? { Attributes: { get: () => ({ DisplayName: 'Skills', AttributeTypeName: { Value: 'MultiSelectPicklistType' } }) } }
+            : { PrimaryIdAttribute: 'opportunityid', PrimaryNameAttribute: 'name' }
+      );
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      const xml = decodeURIComponent(String(retrieveMultiple.mock.calls[0][1]).replace('?fetchXml=', ''));
+      expect(xml).toMatch(/<condition attribute="new_skills" operator="contain-values"><value>100000000<\/value><value>100000002<\/value><\/condition>/);
+    });
+
+    it('does not keep guessed primary attributes when metadata was unavailable', async () => {
+      const { retrieveMultiple } = setup({ template: '<fetch><entity name="opportunity"><attribute name="createdon"/></entity></fetch>' });
+      const getEntityMetadata = jest.fn().mockRejectedValueOnce(new Error('metadata down'))
+        .mockResolvedValue({ PrimaryIdAttribute: 'opportunityid', PrimaryNameAttribute: 'new_title' });
+      (context.utils as unknown as { getEntityMetadata: Mock }).getEntityMetadata = getEntityMetadata;
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(decodeURIComponent(String(retrieveMultiple.mock.calls[0][1]))).toContain('<attribute name="name"');
+
+      control.updateView({ ...context, parameters: { ...context.parameters, subgridFetchXml: { raw: '<fetch><entity name="opportunity"><attribute name="createdon"/></entity></fetch> ' } } } as unknown as ComponentFramework.Context<IInputs>);
+      await flush();
+      expect(decodeURIComponent(String(retrieveMultiple.mock.calls[1][1]))).toContain('<attribute name="new_title"');
     });
 
     it('supports a template without placeholders (e.g. top 5 recently created)', async () => {

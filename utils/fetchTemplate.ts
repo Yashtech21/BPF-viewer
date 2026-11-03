@@ -81,6 +81,11 @@ export function applyPlaceholders(
 export interface IFetchInfo {
   /** Logical name of the root <entity> */
   entityName: string;
+  /**
+   * When the entity lists explicit <attribute>s, add these (e.g. the primary
+   * id/name the grid needs) unless present. Works on the same parsed document.
+   */
+  addAttributes(names: string[]): IFetchInfo;
   /** Serialize the (possibly adjusted) document back to FetchXML */
   toString(): string;
 }
@@ -93,21 +98,15 @@ export class FetchTemplateError extends Error {
 }
 
 /**
- * Parse FetchXML and prepare it to run:
+ * Parse FetchXML (once) and prepare it to run:
  * - validates it's well-formed with a root <fetch> and an <entity name="...">
- * - when the entity lists explicit <attribute>s, adds the primary id/name
- *   attributes the grid needs (if missing)
  * - adds count="250" when neither `top` nor `count` is set
+ * - `addAttributes` adds the primary id/name when explicit attributes are listed
  */
 export function prepareFetch(xml: string, primaryAttributes: string[] = []): IFetchInfo {
-  let doc: Document;
-  try {
-    doc = new DOMParser().parseFromString(xml, 'application/xml');
-  } catch {
-    throw new FetchTemplateError("The FetchXML filter isn't valid XML.", 'invalid');
-  }
-  const root = doc.documentElement;
-  if (!root || doc.getElementsByTagName('parsererror').length > 0 || root.nodeName !== 'fetch') {
+  const doc = parseXml(xml);
+  const root = doc?.documentElement;
+  if (!doc || !root || root.nodeName !== 'fetch') {
     throw new FetchTemplateError("The FetchXML filter isn't valid: it must be a <fetch> document.", 'invalid');
   }
   const entity = Array.from(root.childNodes).find(n => n.nodeName === 'entity') as Element | undefined;
@@ -116,25 +115,91 @@ export function prepareFetch(xml: string, primaryAttributes: string[] = []): IFe
     throw new FetchTemplateError('The FetchXML filter needs an <entity name="..."> element.', 'invalid');
   }
 
-  const children = Array.from(entity.childNodes) as Element[];
-  const hasAllAttributes = children.some(n => n.nodeName === 'all-attributes');
-  const attributes = children.filter(n => n.nodeName === 'attribute').map(n => n.getAttribute('name')?.toLowerCase());
-  if (!hasAllAttributes && attributes.length > 0) {
-    for (const name of primaryAttributes) {
-      if (name && !attributes.includes(name.toLowerCase())) {
-        const attr = doc.createElement('attribute');
-        attr.setAttribute('name', name);
-        entity.insertBefore(attr, entity.firstChild);
-      }
-    }
-  }
-
   if (!root.hasAttribute('top') && !root.hasAttribute('count')) {
     root.setAttribute('count', String(DEFAULT_FETCH_COUNT));
   }
 
-  return {
+  const info: IFetchInfo = {
     entityName: entityName.toLowerCase(),
+    addAttributes(names: string[]) {
+      const children = Array.from(entity.childNodes) as Element[];
+      const hasAllAttributes = children.some(n => n.nodeName === 'all-attributes');
+      const attributes = children.filter(n => n.nodeName === 'attribute').map(n => n.getAttribute('name')?.toLowerCase());
+      if (!hasAllAttributes && attributes.length > 0) {
+        for (const name of names) {
+          if (name && !attributes.includes(name.toLowerCase())) {
+            const attr = doc.createElement('attribute');
+            attr.setAttribute('name', name);
+            entity.insertBefore(attr, entity.firstChild);
+            attributes.push(name.toLowerCase());
+          }
+        }
+      }
+      return info;
+    },
     toString: () => new XMLSerializer().serializeToString(doc),
   };
+  return primaryAttributes.length ? info.addAttributes(primaryAttributes) : info;
+}
+
+/** Parse XML; null when not well-formed */
+function parseXml(xml: string): Document | null {
+  try {
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    return doc.getElementsByTagName('parsererror').length > 0 ? null : doc;
+  } catch {
+    return null;
+  }
+}
+
+/** Condition operators that take a list of <value> elements */
+const LIST_OPERATORS = new Set(['in', 'not-in', 'contain-values', 'not-contain-values']);
+
+/**
+ * Expand multi-valued placeholders (multi-select option sets) into <value>
+ * elements, which list operators require:
+ *   <condition operator="in" value="{x}"/>  ->  <condition operator="in"><value>1</value><value>2</value></condition>
+ *   <value>{x}</value>                      ->  <value>1</value><value>2</value>
+ * Other uses keep the comma-separated string. Values are escaped by the DOM.
+ * Returns the template unchanged when it isn't well-formed (validation reports it later).
+ */
+export function expandListPlaceholders(template: string, lists: Record<string, string[]>): string {
+  const names = Object.keys(lists).filter(n => lists[n].length > 0);
+  if (names.length === 0) return template;
+  const doc = parseXml(template);
+  if (!doc) return template;
+
+  const placeholderOf = (text: string | null) => {
+    const m = /^\s*\{([A-Za-z_][A-Za-z0-9_]*)\}\s*$/.exec(text ?? '');
+    const name = m?.[1].toLowerCase();
+    return name && lists[name]?.length ? name : null;
+  };
+  let changed = false;
+
+  for (const condition of Array.from(doc.getElementsByTagName('condition'))) {
+    const name = placeholderOf(condition.getAttribute('value'));
+    const operator = (condition.getAttribute('operator') ?? '').toLowerCase();
+    if (!name || !LIST_OPERATORS.has(operator)) continue;
+    condition.removeAttribute('value');
+    for (const item of lists[name]) {
+      const value = doc.createElement('value');
+      value.textContent = item;
+      condition.appendChild(value);
+    }
+    changed = true;
+  }
+
+  for (const valueEl of Array.from(doc.getElementsByTagName('value'))) {
+    const name = placeholderOf(valueEl.textContent);
+    if (!name || !valueEl.parentNode) continue;
+    for (const item of lists[name]) {
+      const copy = doc.createElement('value');
+      copy.textContent = item;
+      valueEl.parentNode.insertBefore(copy, valueEl);
+    }
+    valueEl.parentNode.removeChild(valueEl);
+    changed = true;
+  }
+
+  return changed ? new XMLSerializer().serializeToString(doc) : template;
 }

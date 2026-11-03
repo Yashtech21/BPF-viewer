@@ -260,6 +260,8 @@ export interface IBPFViewerProps {
   colors: IStageColors;
   isLoading: boolean;
   error: string | null;
+  /** Neutral message shown as the empty state, or above the list when there are rows */
+  notice?: string | null;
   onNavigate?: (entityName: string, recordId: string) => void;
   onRefresh?: () => void;
   /** Loaders for lazily fetched stage details shown in hover cards */

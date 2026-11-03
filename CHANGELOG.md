@@ -5,6 +5,20 @@ All notable changes to the Business Process Flow Viewer will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-11-03
+
+### Fixed
+
+- Form subgrid FetchXML: placeholder values are read fresh on every run, so a value saved on the form is
+  used on the next subgrid refresh (they were cached for 60s).
+- Primary id/name attributes are cached only when they came from metadata; a guess made while metadata
+  was slow is retried, so rows don't show GUIDs for the session.
+- An empty placeholder is shown as a neutral notice (no red error, no Retry); errors/notices are cleared
+  on every run.
+- Multi-select placeholders expand to `<value>` elements for in / not-in / contain-values / not-contain-values.
+- A warning is shown when the query's table differs from the BPF configuration's table.
+- Changing the template re-runs the query; the FetchXML is parsed once; result ids de-duplicated with a Set.
+
 ## [1.4.0] - 2026-11-03
 
 ### Added

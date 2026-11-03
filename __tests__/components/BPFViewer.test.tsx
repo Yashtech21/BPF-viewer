@@ -204,3 +204,39 @@ describe('BPFViewer', () => {
     // Individual record loading state handled by BPFRow component
   });
 });
+
+describe('BPFViewer notices', () => {
+  it('shows a notice as the empty state, without error styling or Retry', () => {
+    renderWithProviders(
+      <BPFViewer
+        records={[]}
+        settings={mockSettings}
+        colors={mockColors}
+        isLoading={false}
+        error={null}
+        notice="No records to show: Recruit Source is empty on this record."
+        onRefresh={jest.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('No records to show: Recruit Source is empty on this record.');
+    expect(screen.queryByText(/no records to display/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument();
+  });
+
+  it('shows a notice as a banner above existing rows', () => {
+    const stages = [createMockBPFStage('s1', 'Qualify', 'Qualify', 0, 0, false, true)];
+    renderWithProviders(
+      <BPFViewer
+        records={[createMockRecordBPFData('r1', 'Deal one', 'account', 'Account', createMockBPFInstance('p', 'P', 'e', stages, 's1'))]}
+        settings={mockSettings}
+        colors={mockColors}
+        isLoading={false}
+        error={null}
+        notice="Stages may not show."
+      />
+    );
+    expect(screen.getByText('Stages may not show.')).toBeInTheDocument();
+    expect(screen.getByText('Deal one')).toBeInTheDocument();
+  });
+});

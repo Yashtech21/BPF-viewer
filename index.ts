@@ -45,6 +45,7 @@ import {
   FetchTemplateError,
   ID_PLACEHOLDER,
   applyPlaceholders,
+  expandListPlaceholders,
   extractPlaceholders,
   prepareFetch,
   toFetchValue,
@@ -65,6 +66,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private records: IRecordBPFData[] = [];
   private isLoading: boolean = true;
   private error: string | null = null;
+  /** Non-error message for the user (e.g. "nothing to show: <field> is empty") */
+  private notice: string | null = null;
   private bpfConfig: IBPFConfiguration | null = null;
 
   // Live state shared with the React tree (see utils/viewStore.ts)
@@ -230,7 +233,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     // Check if dataset has changed (include first few record IDs to detect view changes)
     const recordIds = dataset.sortedRecordIds || [];
     const idSample = recordIds.slice(0, 5).join(',');
-    const datasetVersion = `${recordIds.length}_${idSample}_${dataset.loading}`;
+    // The form-subgrid template decides the rows too: a changed template re-runs
+    const template = context.parameters.subgridFetchXml?.raw ?? '';
+    const datasetVersion = `${recordIds.length}_${idSample}_${dataset.loading}_${template.length}_${hashString(template)}`;
     const datasetChanged = datasetVersion !== this.lastDatasetVersion;
     this.lastDatasetVersion = datasetVersion;
 
@@ -267,6 +272,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       records: this.records,
       isLoading: this.isLoading,
       error: this.error,
+      notice: this.notice,
       datasetLoading: dataset.loading,
     });
 
@@ -277,6 +283,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       colors: this.cachedColors || this.getColors(),
       isLoading: this.isLoading || dataset.loading,
       error: this.error,
+      notice: this.notice,
       platformTheme,
       allocatedWidth: context.mode.allocatedWidth,
       allocatedHeight: context.mode.allocatedHeight,
@@ -314,6 +321,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     const template = (this.context.parameters.subgridFetchXml?.raw ?? '').trim();
     const host = template ? this.getHostRecord() : null;
+    // Each run starts clean; only this run's outcome sets an error or notice
+    this.error = null;
+    this.notice = null;
     if (template && host) {
       try {
         const result = await this.runFetchTemplate(template, host, signal);
@@ -321,14 +331,18 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
         recordIds = result.ids;
         fetchedNames = result.names;
         fetchedEntity = result.entityName;
-        this.error = null;
+        this.notice = result.warning;
       } catch (e) {
         if (signal.aborted || currentGeneration !== this.requestGeneration) return;
-        // Template problems (empty placeholder, invalid XML) are expected states, not crashes
-        if (e instanceof FetchTemplateError) logger.warn('Form subgrid FetchXML not run:', e.message);
-        else logger.error('Form subgrid FetchXML failed:', e);
         this.records = [];
-        this.error = e instanceof FetchTemplateError ? e.message : getErrorMessage(e);
+        if (e instanceof FetchTemplateError && e.kind === 'missing-values') {
+          // A normal "nothing to show yet" state, not an error
+          logger.warn('Form subgrid FetchXML not run:', e.message);
+          this.notice = e.message;
+        } else {
+          logger.error('Form subgrid FetchXML failed:', e);
+          this.error = e instanceof FetchTemplateError ? e.message : getErrorMessage(e);
+        }
         this.isLoading = false;
         this.publish();
         return;
@@ -534,11 +548,12 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     template: string,
     host: { entityName: string; id: string },
     signal: AbortSignal
-  ): Promise<{ entityName: string; ids: string[]; names: Map<string, string> }> {
+  ): Promise<{ entityName: string; ids: string[]; names: Map<string, string>; warning: string | null }> {
     const service = this.bpfService!;
     const placeholders = extractPlaceholders(template);
     const fields = placeholders.filter(p => p !== ID_PLACEHOLDER);
     const values: Record<string, string | null> = { [ID_PLACEHOLDER]: host.id };
+    const lists: Record<string, string[]> = {};
 
     if (fields.length > 0) {
       const info = await withFallback(this.getFieldInfo(host.entityName, fields), 4000, new Map<string, IFieldInfo>(), `Field types for ${host.entityName}`);
@@ -548,7 +563,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
         fields.map(field => {
           const attributeType = info.get(field)?.attributeType;
           return { field, select: isLookupType(attributeType) ? `_${field}_value` : field, attributeType };
-        })
+        }),
+        // Always the record as saved now (e.g. right after the user saved the form)
+        { fresh: true }
       );
       const failed = fields.filter(f => read.get(f)?.failed);
       if (failed.length) {
@@ -558,10 +575,16 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
           failed
         );
       }
-      for (const field of fields) values[field] = toFetchValue(read.get(field)?.raw);
+      for (const field of fields) {
+        const raw = read.get(field)?.raw;
+        values[field] = toFetchValue(raw);
+        // Multi-select option sets come back as "1,2": list operators need <value> elements
+        const multi = Array.isArray(raw) || /multiselect/i.test(info.get(field)?.attributeType ?? '');
+        if (multi && values[field]) lists[field] = values[field]!.split(',').map(v => v.trim()).filter(Boolean);
+      }
     }
 
-    const { xml, missing } = applyPlaceholders(template, values);
+    const { xml, missing } = applyPlaceholders(expandListPlaceholders(template, lists), values);
     if (missing.length) {
       const labels = await withFallback(this.getFieldInfo(host.entityName, missing), 2000, new Map<string, IFieldInfo>(), 'Field labels');
       const names = missing.map(f => labels.get(f)?.displayName || f);
@@ -572,21 +595,31 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       );
     }
 
-    const entityName = prepareFetch(xml).entityName; // validates before any metadata call
+    const fetch = prepareFetch(xml); // validates before any metadata call
+    const entityName = fetch.entityName;
     const primary = await this.getPrimaryAttributes(entityName);
-    const prepared = prepareFetch(xml, [primary.id, primary.name]);
-    const rows = await service.executeFetchXml(entityName, prepared.toString(), signal);
+    const rows = await service.executeFetchXml(entityName, fetch.addAttributes([primary.id, primary.name]).toString(), signal);
 
+    const seen = new Set<string>();
     const ids: string[] = [];
     const names = new Map<string, string>();
     for (const row of rows) {
       const id = normGuid(row[primary.id] as string);
-      if (!isValidGuid(id) || ids.includes(id)) continue;
+      if (!isValidGuid(id) || seen.has(id)) continue;
+      seen.add(id);
       ids.push(id);
       const name = row[`${primary.name}@OData.Community.Display.V1.FormattedValue`] ?? row[primary.name];
       if (typeof name === 'string' && name) names.set(id, name);
     }
-    return { entityName, ids, names };
+
+    // Stages resolve through the BPF configuration's lookups: a query on another
+    // table would show every row as "No active business process flow"
+    const configEntity = this.getEntityNameFromConfig();
+    const warning =
+      configEntity !== 'unknown' && configEntity !== entityName
+        ? `The form subgrid FetchXML returns ${entityName} records, but the BPF configuration is for ${configEntity}; stages may not show.`
+        : null;
+    return { entityName, ids, names, warning };
   }
 
   /** Primary id / name attribute of a table (metadata, cached), with conventional fallbacks */
@@ -595,6 +628,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     if (cached) return cached;
     let id = `${entityName}id`;
     let name = 'name';
+    let fromMetadata = false;
     try {
       const metadata = await withFallback(
         Promise.resolve(this.context.utils?.getEntityMetadata?.(entityName)),
@@ -604,13 +638,17 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       );
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const md = metadata as any;
-      id = md?.PrimaryIdAttribute || id;
-      name = md?.PrimaryNameAttribute || name;
+      if (md?.PrimaryIdAttribute && md?.PrimaryNameAttribute) {
+        id = md.PrimaryIdAttribute;
+        name = md.PrimaryNameAttribute;
+        fromMetadata = true;
+      }
     } catch {
       // conventional names
     }
     const result = { id: id.toLowerCase(), name: name.toLowerCase() };
-    this.primaryAttributeCache.set(entityName, result);
+    // Only real metadata is cached; a guess (metadata slow/unavailable) is retried next run
+    if (fromMetadata) this.primaryAttributeCache.set(entityName, result);
     return result;
   }
 
@@ -782,6 +820,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       records: this.records,
       isLoading: this.isLoading,
       error: this.error,
+      notice: this.notice,
     });
     try {
       this.context?.factory?.requestRender?.();
@@ -813,4 +852,11 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     this.bpfService?.clearCache();
     this.fetchedRecordIds.clear();
   }
+}
+
+/** Small stable string hash (djb2) for change detection */
+function hashString(value: string): number {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0;
+  return hash;
 }

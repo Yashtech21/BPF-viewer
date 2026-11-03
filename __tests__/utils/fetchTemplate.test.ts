@@ -6,6 +6,7 @@ import {
   prepareFetch,
   FetchTemplateError,
   DEFAULT_FETCH_COUNT,
+  expandListPlaceholders,
 } from '../../utils/fetchTemplate';
 
 const SAME_SOURCE = `<fetch>
@@ -105,5 +106,35 @@ describe('prepareFetch', () => {
     ['bad entity name', '<fetch><entity name="x y"/></fetch>'],
   ])('rejects invalid FetchXML (%s)', (_label, xml) => {
     expect(() => prepareFetch(xml)).toThrow(FetchTemplateError);
+  });
+});
+
+describe('expandListPlaceholders', () => {
+  it('turns a list placeholder in a list-operator condition into <value> elements', () => {
+    const out = expandListPlaceholders('<fetch><entity name="o"><filter><condition attribute="s" operator="in" value="{s}"/></filter></entity></fetch>', { s: ['1', '2'] });
+    expect(out).toContain('<condition attribute="s" operator="in"><value>1</value><value>2</value></condition>');
+  });
+
+  it('repeats a <value>{x}</value> element per item and escapes values', () => {
+    const out = expandListPlaceholders('<fetch><entity name="o"><filter><condition attribute="s" operator="not-in"><value>{s}</value></condition></filter></entity></fetch>', { s: ['a&b', '2'] });
+    expect(out).toContain('<value>a&amp;b</value><value>2</value>');
+  });
+
+  it('leaves single-value operators, unknown placeholders and invalid XML alone', () => {
+    const eq = '<fetch><entity name="o"><filter><condition attribute="s" operator="eq" value="{s}"/></filter></entity></fetch>';
+    expect(expandListPlaceholders(eq, { s: ['1', '2'] })).toBe(eq);
+    expect(expandListPlaceholders(eq, {})).toBe(eq);
+    expect(expandListPlaceholders('<fetch', { s: ['1'] })).toBe('<fetch');
+  });
+});
+
+describe('prepareFetch parses once', () => {
+  it('adds attributes to the same document via addAttributes', () => {
+    const fetch = prepareFetch('<fetch><entity name="opportunity"><attribute name="createdon"/></entity></fetch>');
+    expect(fetch.entityName).toBe('opportunity');
+    const out = fetch.addAttributes(['opportunityid', 'name']).toString();
+    expect(out).toContain('<attribute name="opportunityid"');
+    expect(out).toContain('<attribute name="name"');
+    expect(out).toContain('count="250"');
   });
 });

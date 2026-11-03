@@ -22,6 +22,8 @@ export interface IViewState {
   /** The platform dataset itself is loading (paging, view switch) */
   datasetLoading: boolean;
   error: string | null;
+  /** Neutral message (not an error), e.g. why a form-subgrid query shows nothing */
+  notice?: string | null;
 }
 
 export type Listener = () => void;
