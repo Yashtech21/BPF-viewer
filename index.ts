@@ -24,6 +24,7 @@ import {
   Density,
   IStageDetailsLoaders,
   IFieldInfo,
+  IFieldValue,
 } from './types';
 import {
   resolveColors,
@@ -36,7 +37,8 @@ import { logger } from './utils/logger';
 import { createPerfTracker } from './utils/perfTracker';
 import { runQueue } from './utils/taskQueue';
 import { ViewStore } from './utils/viewStore';
-import { readAttributeInfo } from './utils/fieldMetadata';
+import { readAttributeInfo, isLookupType } from './utils/fieldMetadata';
+import { formatRawValue, isEmptyValue } from './utils/stageDetails';
 
 /**
  * How many records are fetched in parallel. Rows still update one by one as
@@ -101,8 +103,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     // Stable loaders for stage hover cards (lazy, cached in the service)
     const service = this.bpfService;
     this.loaders = {
-      loadStageSteps: (stage) => service.getStageSteps(stage),
-      loadRecordValues: (entityName, recordId) => service.getRecordValues(entityName, recordId),
+      loadStageSteps: (stage, instance) => service.getStageSteps(stage, instance),
+      loadRecordValues: (entityName, recordId, fieldNames) => this.getRecordFieldValues(entityName, recordId, fieldNames),
       loadFieldInfo: (entityName, fieldNames) => this.getFieldInfo(entityName, fieldNames),
       loadTableName: (entityName) => this.getEntityDisplayName(entityName),
     };
@@ -462,6 +464,65 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     this.entityDisplayNameCache.set(entityName, fallback);
     return fallback;
+  }
+
+  /**
+   * Current values of a stage's fields on a record, for the hover card.
+   * Reads the grid's dataset row first (getValue for the raw value,
+   * getFormattedValue for display); only fields that aren't columns of the
+   * view are requested from the Web API, and only those columns.
+   */
+  private async getRecordFieldValues(
+    entityName: string,
+    recordId: string,
+    fieldNames: string[] = []
+  ): Promise<Map<string, IFieldValue>> {
+    const result = new Map<string, IFieldValue>();
+    const fields = [...new Set(fieldNames.map(f => f.toLowerCase()).filter(Boolean))];
+    if (fields.length === 0 || !this.bpfService) return result;
+
+    const dataset = this.context.parameters.records;
+    const row = dataset?.records?.[recordId] as unknown as IDatasetRecord | undefined;
+    const rowEntity = row?.getNamedReference?.()?.entityType;
+    const useRow = !!row && (!rowEntity || rowEntity === entityName);
+    const columns = new Set((dataset?.columns ?? []).map(c => c.name.toLowerCase()));
+
+    const missing: string[] = [];
+    for (const field of fields) {
+      if (useRow && columns.has(field)) {
+        try {
+          const raw = row!.getValue(field);
+          const formatted = row!.getFormattedValue(field);
+          const hasValue = !isEmptyValue(raw);
+          result.set(field, { hasValue, display: hasValue ? formatted || formatRawValue(raw) || null : null });
+        } catch (e) {
+          logger.warn(`Couldn't read ${field} from the grid row:`, e);
+          result.set(field, { hasValue: false, display: null, failed: true });
+        }
+      } else {
+        missing.push(field);
+      }
+    }
+
+    if (missing.length > 0) {
+      // Types tell us which columns are lookups (selected as _x_value); don't wait long for them
+      const info = await Promise.race([
+        this.getFieldInfo(entityName, missing),
+        new Promise<Map<string, IFieldInfo>>(resolve => setTimeout(() => resolve(new Map()), 4000)),
+      ]);
+      const fetched = await this.bpfService.getRecordColumns(
+        entityName,
+        recordId,
+        missing.map(field => {
+          const attributeType = info.get(field)?.attributeType;
+          return { field, select: isLookupType(attributeType) ? `_${field}_value` : field, attributeType };
+        })
+      );
+      for (const field of missing) {
+        result.set(field, fetched.get(field) ?? { hasValue: false, display: null, failed: true });
+      }
+    }
+    return result;
   }
 
   /**

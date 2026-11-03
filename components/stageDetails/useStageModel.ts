@@ -64,11 +64,11 @@ async function timed<T>(what: string, work: () => Promise<T>): Promise<T> {
   }
 }
 
-export type FieldState = 'filled' | 'empty' | 'hidden' | 'unknown';
+export type FieldState = 'filled' | 'empty' | 'hidden' | 'unknown' | 'failed';
 
 export interface IStageFieldRow {
   step: IStageStep;
-  /** Label to show: BPF step label, else metadata display name, else logical name */
+  /** Label to show: metadata display name, else controlDisplayName, else the BPF step text, else logical name */
   label: string;
   state: FieldState;
   /** Formatted value when filled and displayable */
@@ -124,13 +124,15 @@ export function buildRows(
   return steps.map(step => {
     const key = step.fieldName.toLowerCase();
     const info = key ? fieldInfo.get(key) : undefined;
-    const ownLabel = step.displayName && step.displayName.toLowerCase() !== key ? step.displayName : '';
-    const label = ownLabel || info?.displayName || step.displayName || step.fieldName;
+    const label = info?.displayName || step.controlDisplayName || step.displayName || step.fieldName;
 
     if (!key || !values) {
       return { step, label, state: 'unknown' as const, display: null };
     }
     const value = values.get(key);
+    if (value?.failed) {
+      return { step, label, state: 'failed' as const, display: null };
+    }
     if (value?.hasValue) {
       return { step, label, state: 'filled' as const, display: value.display };
     }
@@ -177,7 +179,7 @@ export function useStageModel(
       : context.recordId
     : null;
   const valuesEntity = stageEntity ?? rowEntity;
-  const canLoadSteps = !!stage.steps || !!loaders?.loadStageSteps;
+  const canLoadSteps = !!loaders?.loadStageSteps || !!stage.steps;
 
   const [state, setState] = React.useState<ILoadState>({
     loading: canLoadSteps,
@@ -198,7 +200,11 @@ export function useStageModel(
     const run = async () => {
       let steps: IStageStep[];
       try {
-        steps = stage.steps ?? (await timed(`steps for "${stage.stageName}"`, () => loaders!.loadStageSteps!(stage)));
+        // The process definition is the source of a stage's fields; stage.steps
+        // (from processstage.clientdata) is only used when there's no loader
+        steps = loaders?.loadStageSteps
+          ? await timed(`fields of "${stage.stageName}"`, () => loaders.loadStageSteps!(stage, context.instance))
+          : stage.steps ?? [];
       } catch {
         if (!cancelled) setState(prev => ({ ...prev, loading: false, stepsFailed: true }));
         return;
@@ -223,7 +229,7 @@ export function useStageModel(
         } else {
           try {
             values = await timed(`values of ${valuesEntity} ${valuesRecordId}`, () =>
-              loaders.loadRecordValues!(valuesEntity, valuesRecordId)
+              loaders.loadRecordValues!(valuesEntity, valuesRecordId, fields)
             );
             valuesSource = stageEntity ? 'related' : 'record';
           } catch {
@@ -252,7 +258,7 @@ export function useStageModel(
     return () => {
       cancelled = true;
     };
-  }, [enabled, stage.stageId, stage.steps, loaders, valuesEntity, valuesRecordId]);
+  }, [enabled, stage.stageId, stage.steps, loaders, valuesEntity, valuesRecordId, context?.instance.processDefinitionId]);
 
   return React.useMemo(() => {
     if (!context) return null;
@@ -271,7 +277,9 @@ export function useStageModel(
       filled: known.filter(r => r.state === 'filled').length,
       requiredEmpty: rows.filter(r => r.step.isRequired && r.state === 'empty'),
       requiredUnverified: valuesLoaded
-        ? rows.filter(r => r.step.isRequired && r.step.fieldName && (r.state === 'hidden' || r.state === 'unknown'))
+        ? rows.filter(
+            r => r.step.isRequired && r.step.fieldName && (r.state === 'hidden' || r.state === 'unknown' || r.state === 'failed')
+          )
         : [],
     };
   }, [state, stage, status, context, stageEntity]);

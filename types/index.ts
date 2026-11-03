@@ -114,8 +114,10 @@ export interface IBPFStage {
 export interface IStageStep {
   /** Logical name of the bound attribute, e.g. "budgetamount" (may be empty for non-field steps) */
   fieldName: string;
-  /** Label shown in the BPF for this step */
+  /** Label shown in the BPF for this step (control label, else the step's description) */
   displayName: string;
+  /** The ControlStep's own controlDisplayName, when set */
+  controlDisplayName?: string;
   /** Whether the step is required to move to the next stage */
   isRequired: boolean;
 }
@@ -125,6 +127,8 @@ export interface IFieldValue {
   hasValue: boolean;
   /** Formatted (display) value when available, otherwise a string form of the raw value */
   display: string | null;
+  /** The value could not be loaded (the column request failed) */
+  failed?: boolean;
 }
 
 /**
@@ -163,6 +167,8 @@ export interface IBPFInstance {
    * used to load values for stages that run on another table.
    */
   relatedRecordIds?: Record<string, string>;
+  /** The BPF's process definition (workflow) id, from the instance's _processid_value */
+  processDefinitionId?: string | null;
 }
 
 // ============================================
@@ -221,6 +227,8 @@ export interface IFieldInfo {
   displayName?: string;
   /** Field-level security is enabled on the column */
   isSecured?: boolean;
+  /** Attribute type name from metadata, e.g. "Money", "Lookup", "Boolean", "Picklist" */
+  attributeType?: string;
 }
 
 /** Async loaders used by stage hover cards (provided by the PCF host) */
@@ -229,10 +237,14 @@ export interface IStageDetailsLoaders {
   loadTableName?: (entityName: string) => Promise<string>;
   /** Field metadata (display names, field security) for a table, cached by the host */
   loadFieldInfo?: (entityName: string, fieldNames: string[]) => Promise<Map<string, IFieldInfo>>;
-  /** Resolve the steps for a stage (from clientdata), cached by the service */
-  loadStageSteps?: (stage: IBPFStage) => Promise<IStageStep[]>;
-  /** Load attribute values for a record so step completion can be shown */
-  loadRecordValues?: (entityName: string, recordId: string) => Promise<Map<string, IFieldValue>>;
+  /** Resolve every field of a stage from the BPF's process definition, cached by the service */
+  loadStageSteps?: (stage: IBPFStage, instance?: IBPFInstance) => Promise<IStageStep[]>;
+  /**
+   * Current values of the given fields on a record: from the grid's dataset
+   * row when it has the column, otherwise only the missing columns are
+   * requested. A field that can't load comes back with `failed: true`.
+   */
+  loadRecordValues?: (entityName: string, recordId: string, fieldNames?: string[]) => Promise<Map<string, IFieldValue>>;
 }
 
 /** Props for the top-level BPFViewer component (without FluentProvider wrapper) */

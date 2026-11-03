@@ -7,7 +7,7 @@
 
 import { BPFService } from '../../services/BPFService';
 import { createMockWebAPI } from '../setup/testUtils';
-import { SAMPLE_CLIENT_DATA } from '../setup/fixtures';
+import { SAMPLE_CLIENT_DATA, SYNTHETIC_PROCESS_DEFINITION, SYNTH_STAGE_ID } from '../setup/fixtures';
 import type { IBPFConfiguration, IBPFStage } from '../../types';
 
 const RECORD_ID = '00000000-0000-0000-0000-000000000001';
@@ -239,6 +239,135 @@ describe('BPFService stage details', () => {
         service.getBPFDataForRecord(RECORD_ID, 'opportunity', twoBpfs, { throwOnError: true, signal: controller.signal })
       ).rejects.toThrow('Request cancelled');
       expect(webApi.retrieveMultipleRecords).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stage fields from the process definition (workflow.clientdata)', () => {
+    const WORKFLOW = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+    const instance = { processDefinitionId: `{${WORKFLOW.toUpperCase()}}`, bpfEntityName: 'opportunitysalesprocess' };
+
+    beforeEach(() => {
+      webApi.retrieveRecord = jest.fn().mockImplementation((entity: string) =>
+        entity === 'workflow'
+          ? Promise.resolve({ clientdata: SYNTHETIC_PROCESS_DEFINITION })
+          : Promise.reject(new Error(`unexpected ${entity}`))
+      );
+    });
+
+    it("reads the hovered stage's fields from the workflow, once per process", async () => {
+      const first = await service.getStageSteps(stage({ stageId: SYNTH_STAGE_ID }), instance);
+      const other = await service.getStageSteps(stage({ stageId: '77777777-7777-4777-8777-777777777777', isActive: false }), instance);
+
+      expect(first.map(f => f.fieldName)).toEqual([
+        'x_offerlettersent', 'x_transitionassistance', 'x_approvedtaamount', 'x_taterm', 'x_ipounits', 'x_startdate',
+      ]);
+      expect(other.map(f => f.fieldName)).toEqual(['x_closed']); // a stage not reached yet
+      expect(webApi.retrieveRecord).toHaveBeenCalledTimes(1);
+      expect(webApi.retrieveRecord).toHaveBeenCalledWith('workflow', WORKFLOW, '?$select=clientdata');
+    });
+
+    it('prefers the definition over steps parsed from processstage', async () => {
+      const fields = await service.getStageSteps(
+        stage({ stageId: SYNTH_STAGE_ID, steps: [{ fieldName: 'stale', displayName: 'Stale', isRequired: false }] }),
+        instance
+      );
+      expect(fields[0].fieldName).toBe('x_offerlettersent');
+    });
+
+    it("falls back to the stage's processstage.clientdata when the definition lacks the stage or fails", async () => {
+      webApi.retrieveRecord = jest.fn().mockImplementation((entity: string) =>
+        entity === 'workflow'
+          ? Promise.reject(new Error('403 on workflow'))
+          : Promise.resolve({ clientdata: SAMPLE_CLIENT_DATA })
+      );
+      const fields = await service.getStageSteps(stage(), instance);
+      expect(fields.map(f => f.fieldName)).toEqual(['parentcontactid', 'budgetamount', 'purchasetimeframe']);
+      expect(webApi.retrieveRecord).toHaveBeenCalledWith('processstage', STAGE_ID, expect.any(String));
+    });
+  });
+
+  describe('active stage from traversedpath', () => {
+    it('marks the last traversed stage active, comparing GUIDs without braces/case', async () => {
+      const A = 'aaaaaaaa-0000-4000-8000-000000000001';
+      const B = 'bbbbbbbb-0000-4000-8000-000000000002';
+      const C = 'cccccccc-0000-4000-8000-000000000003';
+      webApi.retrieveMultipleRecords.mockResolvedValue({
+        entities: [{
+          businessprocessflowinstanceid: INSTANCE_ID,
+          _opportunityid_value: RECORD_ID,
+          // activestageid disagrees; traversedpath's last entry wins
+          _activestageid_value: A,
+          traversedpath: `{${A.toUpperCase()}},{${B.toUpperCase()}}`,
+          statuscode: 1,
+          _processid_value: 'dddddddd-0000-4000-8000-000000000004',
+        }],
+      });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ value: [A, B, C].map((id, i) => ({ processstageid: id, stagename: `S${i + 1}`, stagecategory: 0 })) }),
+      }) as unknown as typeof fetch;
+
+      const instance = (await service.getBPFDataForRecords([RECORD_ID], config)).get(RECORD_ID)!;
+      expect(instance.stages.map(s => [s.isCompleted, s.isActive])).toEqual([[true, false], [false, true], [false, false]]);
+      expect(instance.activeStageId).toBe(B);
+      expect(instance.processDefinitionId).toBe('dddddddd-0000-4000-8000-000000000004');
+    });
+  });
+
+  describe('getRecordColumns', () => {
+    it('requests only the given columns and formats by type', async () => {
+      webApi.retrieveRecord = jest.fn().mockResolvedValue({
+        x_amount: 1500,
+        'x_amount@OData.Community.Display.V1.FormattedValue': '$1,500.00',
+        x_sent: true,
+        x_start: '2026-10-03',
+        _x_owner_value: '00000000-0000-0000-0000-0000000000ff',
+        '_x_owner_value@OData.Community.Display.V1.FormattedValue': 'Jane Doe',
+        x_note: null,
+      });
+      const values = await service.getRecordColumns('opportunity', RECORD_ID, [
+        { field: 'x_amount', select: 'x_amount', attributeType: 'Money' },
+        { field: 'x_sent', select: 'x_sent', attributeType: 'Boolean' },
+        { field: 'x_start', select: 'x_start', attributeType: 'DateTime' },
+        { field: 'x_owner', select: '_x_owner_value', attributeType: 'Lookup' },
+        { field: 'x_note', select: 'x_note', attributeType: 'Memo' },
+      ]);
+      expect(webApi.retrieveRecord).toHaveBeenCalledTimes(1);
+      expect(webApi.retrieveRecord).toHaveBeenCalledWith('opportunity', RECORD_ID, '?$select=x_amount,x_sent,x_start,_x_owner_value,x_note');
+      expect(values.get('x_amount')).toEqual({ hasValue: true, display: '$1,500.00' });
+      expect(values.get('x_sent')).toEqual({ hasValue: true, display: 'Yes' });
+      expect(values.get('x_start')?.display).toMatch(/2026/);
+      expect(values.get('x_owner')).toEqual({ hasValue: true, display: 'Jane Doe' });
+      expect(values.get('x_note')).toEqual({ hasValue: false, display: null });
+    });
+
+    it('isolates a column that fails: the others still load', async () => {
+      webApi.retrieveRecord = jest.fn().mockImplementation((_e: string, _id: string, query: string) => {
+        if (query.includes('x_broken')) return Promise.reject(new Error('400 Could not find a property named x_broken'));
+        return Promise.resolve({ x_ok: 'fine' });
+      });
+      const values = await service.getRecordColumns('opportunity', RECORD_ID, [
+        { field: 'x_ok', select: 'x_ok', attributeType: 'String' },
+        { field: 'x_broken', select: 'x_broken', attributeType: 'String' },
+      ]);
+      expect(values.get('x_ok')).toEqual({ hasValue: true, display: 'fine' });
+      expect(values.get('x_broken')).toEqual({ hasValue: false, display: null, failed: true });
+    });
+
+    it('retries a column of unknown type as a lookup', async () => {
+      webApi.retrieveRecord = jest.fn().mockImplementation((_e: string, _id: string, query: string) =>
+        query === '?$select=_x_contact_value'
+          ? Promise.resolve({ _x_contact_value: 'guid', '_x_contact_value@OData.Community.Display.V1.FormattedValue': 'Ann' })
+          : Promise.reject(new Error('400'))
+      );
+      const values = await service.getRecordColumns('opportunity', RECORD_ID, [{ field: 'x_contact', select: 'x_contact' }]);
+      expect(values.get('x_contact')).toEqual({ hasValue: true, display: 'Ann' });
+    });
+
+    it('marks every column failed for invalid input without calling the API', async () => {
+      const values = await service.getRecordColumns('bad name!', RECORD_ID, [{ field: 'x', select: 'x' }]);
+      expect(values.get('x')).toEqual({ hasValue: false, display: null, failed: true });
+      expect(webApi.retrieveRecord).not.toHaveBeenCalled();
     });
   });
 

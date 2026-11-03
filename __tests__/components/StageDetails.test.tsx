@@ -200,7 +200,7 @@ describe('StageDetailsCard content', () => {
     expect(card).toHaveTextContent('$5,000.00');
     expect(card).toHaveTextContent('Jane Doe');
     expect(card).toHaveTextContent('Required to move on: Purchase Timeframe');
-    expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('opportunity', '00000000-0000-0000-0000-000000000001');
+    expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('opportunity', '00000000-0000-0000-0000-000000000001', ['budgetamount', 'parentcontactid', 'purchasetimeframe']);
   });
 
   it('shows the process footer', async () => {

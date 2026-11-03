@@ -31,6 +31,7 @@ import {
   RecordRegular,
   LockClosedRegular,
   CircleHintRegular,
+  ErrorCircleRegular,
 } from '@fluentui/react-icons';
 import type { IBPFStage } from '../../types';
 import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
@@ -373,13 +374,16 @@ const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, 
   } else if (state === 'filled') {
     icon = <CheckmarkCircleFilled className={styles.stepIconDone} aria-hidden="true" />;
     value = display ? sanitizeText(display) : 'Set';
+  } else if (state === 'failed') {
+    icon = <ErrorCircleRegular className={styles.stepIconTodo} aria-hidden="true" />;
+    value = "couldn't load";
   } else if (state === 'hidden') {
     icon = <LockClosedRegular className={styles.stepIconTodo} aria-hidden="true" />;
     // Secured + no value: either empty or not readable by this user
-    value = 'Empty or no access';
+    value = 'empty or no access';
   } else {
     icon = <CircleRegular className={styles.stepIconTodo} aria-hidden="true" />;
-    value = 'Empty';
+    value = 'empty';
   }
 
   return (

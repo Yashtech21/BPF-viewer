@@ -5,6 +5,26 @@ All notable changes to the Business Process Flow Viewer will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-11-03
+
+### Changed
+
+- **Stage fields come from the process definition.** The hover card reads every field of the hovered
+  stage from the BPF's `workflow.clientdata` (the instance's `_processid_value`), finding the stage by
+  `stageId` anywhere in the nested tree (stages sit under entity steps / condition branches), GUIDs
+  compared without braces/case. Works for stages the record hasn't reached. Falls back to the stage's
+  `processstage.clientdata` only if the definition can't be read or lacks the stage.
+- **Values come from the grid row.** Field values are read from the dataset row (`getValue` /
+  `getFormattedValue`); only fields that aren't columns of the view are fetched, and only those
+  columns (`$select`, lookups as `_x_value`). No more whole-record fetch on hover.
+- **Labels:** metadata display name, else the control's `controlDisplayName`.
+- **Active stage:** the last entry of the instance's `traversedpath` (normalized), falling back to
+  `activestageid` when that entry isn't a stage on the path.
+- **Per-field failures:** a field whose value can't load shows "couldn't load"; the rest of the card
+  keeps working (a required field that couldn't load is reported as unverifiable, never as filled).
+  Fields without a value show "empty".
+- Every field of the stage is listed, including steps hidden in the BPF designer.
+
 ## [1.1.0] - 2026-11-01
 
 Fork of the upstream 1.0.0 control with richer stage information and a modernised UI.

@@ -9,6 +9,7 @@
  */
 
 import type { IBPFInstance, IStageStep, ProcessStatus } from '../types';
+import { getStageFields, parseDefinition, DefinitionNode } from './processDefinition';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -16,116 +17,15 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // clientdata parsing
 // ============================================
 
-type JsonNode = { [key: string]: unknown };
-
-function isObject(value: unknown): value is JsonNode {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function className(node: JsonNode): string {
-  return typeof node.__class === 'string' ? node.__class : '';
-}
-
-/** Depth-first search for the first descendant that binds a data field */
-function findControl(node: unknown, depth = 0): JsonNode | null {
-  if (depth > 12) return null;
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = findControl(child, depth + 1);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (!isObject(node)) return null;
-  if (typeof node.dataFieldName === 'string' || typeof node.controlId === 'string') {
-    return node;
-  }
-  for (const key of Object.keys(node)) {
-    const found = findControl(node[key], depth + 1);
-    if (found) return found;
-  }
-  return null;
-}
-
-function asString(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
 /**
- * Parse the step list from a processstage.clientdata JSON document.
- *
- * The document is a serialized Workflow ObjectModel tree:
- *   StageStep -> steps.list[] -> StepStep (isProcessRequired, description)
- *                                   -> steps.list[] -> ControlStep (dataFieldName, controlDisplayName)
- *
- * The walker is deliberately tolerant: it does not depend on exact nesting,
- * only on the `__class` names and well-known property names, and it never throws.
+ * Parse the step list from a processstage.clientdata JSON document (a single
+ * StageStep tree). Same field rules as the process definition parser: every
+ * ControlStep `dataFieldName` in the stage, in order. Never throws.
  */
 export function parseStageSteps(clientData: string | null | undefined): IStageStep[] {
-  if (!clientData) return [];
-
-  let root: unknown;
-  try {
-    root = JSON.parse(clientData);
-  } catch {
-    return [];
-  }
-
-  const steps: IStageStep[] = [];
-  const seen = new Set<string>();
-
-  const push = (step: IStageStep) => {
-    const key = `${step.fieldName}|${step.displayName}`;
-    if (seen.has(key) || (!step.fieldName && !step.displayName)) return;
-    seen.add(key);
-    steps.push(step);
-  };
-
-  const walk = (node: unknown, depth: number): void => {
-    if (depth > 16) return;
-    if (Array.isArray(node)) {
-      node.forEach(child => walk(child, depth + 1));
-      return;
-    }
-    if (!isObject(node)) return;
-
-    const cls = className(node);
-
-    // StepStep: one visible step in the stage (wraps a ControlStep)
-    if (cls.startsWith('StepStep')) {
-      const control = findControl(node.steps);
-      const fieldName = asString(control?.dataFieldName) || asString(control?.controlId);
-      const displayName =
-        asString(control?.controlDisplayName) ||
-        asString(node.description) ||
-        asString(node.name) ||
-        fieldName;
-      // Steps hidden in the BPF designer are not shown to users in D365 either
-      if (node.isHidden !== true && control?.isHidden !== true) {
-        push({ fieldName, displayName, isRequired: node.isProcessRequired === true });
-      }
-      return; // children already consumed
-    }
-
-    // A ControlStep outside a StepStep (older/alternate serializations)
-    if (cls.startsWith('ControlStep') && typeof node.dataFieldName === 'string') {
-      if (node.isHidden === true) return;
-      const fieldName = node.dataFieldName;
-      push({
-        fieldName,
-        displayName: asString(node.controlDisplayName) || fieldName,
-        isRequired: node.isProcessRequired === true || node.isRequired === true,
-      });
-      return;
-    }
-
-    for (const key of Object.keys(node)) {
-      walk(node[key], depth + 1);
-    }
-  };
-
-  walk(root, 0);
-  return steps;
+  const root = parseDefinition(clientData);
+  if (!root || typeof root !== 'object') return [];
+  return getStageFields(root as DefinitionNode);
 }
 
 // ============================================
@@ -358,4 +258,49 @@ export function getStageTiming(
     days,
     severity: getAgeSeverity(days, warningDays),
   };
+}
+
+// ============================================
+// Field value formatting
+// ============================================
+
+/** null, undefined, '' and [] count as "no value" */
+export function isEmptyValue(raw: unknown): boolean {
+  return raw === null || raw === undefined || raw === '' || (Array.isArray(raw) && raw.length === 0);
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/**
+ * Display text for a raw value when the platform gave no formatted value.
+ * Formatted values (currency with symbol, option set labels, user date
+ * format) always win; this only covers what's left by type.
+ */
+export function formatRawValue(raw: unknown, attributeType?: string, locale?: string): string {
+  if (isEmptyValue(raw)) return '';
+  const type = (attributeType ?? '').toLowerCase();
+  if (typeof raw === 'boolean') return raw ? 'Yes' : 'No';
+  if (raw instanceof Date) return formatDate(raw.toISOString(), type !== 'dateonly', locale);
+  if (typeof raw === 'string' && (type === 'datetime' || ISO_DATE_RE.test(raw))) {
+    const formatted = formatDate(raw, raw.includes('T'), locale);
+    if (formatted) return formatted;
+  }
+  if (typeof raw === 'number') {
+    try {
+      return type === 'money'
+        ? new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(raw)
+        : new Intl.NumberFormat(locale).format(raw);
+    } catch {
+      return String(raw);
+    }
+  }
+  if (Array.isArray(raw)) {
+    return raw.map(item => formatRawValue(item, attributeType, locale)).filter(Boolean).join(', ');
+  }
+  if (typeof raw === 'object') {
+    const named = raw as { name?: unknown; Name?: unknown };
+    const name = named.name ?? named.Name;
+    return typeof name === 'string' ? name : '';
+  }
+  return String(raw);
 }

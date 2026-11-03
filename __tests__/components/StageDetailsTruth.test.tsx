@@ -121,14 +121,14 @@ describe('data truth', () => {
     expect(card).not.toHaveTextContent('filled');
   });
 
-  it('a secured required field without a value is "Empty or no access" and reported as unverifiable', async () => {
+  it('a secured required field without a value is "empty or no access" and reported as unverifiable', async () => {
     const context = makeContext();
     (context.loaders!.loadFieldInfo as jest.Mock).mockResolvedValue(
       new Map<string, IFieldInfo>([['purchasetimeframe', { isSecured: true }]])
     );
     renderWith(context);
     const card = await openStage(1);
-    expect(card).toHaveTextContent('Empty or no access');
+    expect(card).toHaveTextContent('empty or no access');
     expect(card).toHaveTextContent('2/2 filled');
     expect(card).not.toHaveTextContent('Required to move on');
     // Never claims everything required is filled when it can't know
@@ -174,7 +174,7 @@ describe('data truth', () => {
     };
     renderWith(context);
     const card = await openStage(0);
-    expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('lead', LEAD);
+    expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('lead', LEAD, ['budgetamount', 'parentcontactid', 'purchasetimeframe']);
     expect(card).toHaveTextContent('Values from the related Lead record');
     expect(card).toHaveTextContent('$5,000.00');
   });
@@ -389,6 +389,60 @@ describe('review fixes', () => {
   });
 });
 
+describe('stage fields and values (definition + record)', () => {
+  it('labels fields by metadata display name, else controlDisplayName', async () => {
+    const context = makeContext();
+    (context.loaders!.loadStageSteps as jest.Mock).mockResolvedValue([
+      { fieldName: 'x_offerlettersent', controlDisplayName: 'Offer Letter Sent', displayName: 'Offer Letter Sent', isRequired: false },
+      { fieldName: 'x_taterm', controlDisplayName: 'TA Term', displayName: 'TA Term', isRequired: false },
+    ]);
+    (context.loaders!.loadFieldInfo as jest.Mock).mockResolvedValue(
+      new Map<string, IFieldInfo>([['x_offerlettersent', { displayName: 'Offer letter sent?' }]])
+    );
+    (context.loaders!.loadRecordValues as jest.Mock).mockResolvedValue(new Map());
+    renderWith(context);
+    const card = await openStage(1);
+    expect(card).toHaveTextContent('Offer letter sent?'); // metadata wins
+    expect(card).not.toHaveTextContent('Offer Letter Sent');
+    expect(card).toHaveTextContent('TA Term'); // fallback: controlDisplayName
+  });
+
+  it('passes the instance to the field loader and requests values for exactly the stage fields', async () => {
+    const context = makeContext();
+    renderWith(context);
+    await openStage(2); // an upcoming stage the record hasn't reached
+    expect(context.loaders!.loadStageSteps).toHaveBeenCalledWith(expect.objectContaining({ stageId: 's3' }), context.instance);
+    expect(context.loaders!.loadRecordValues).toHaveBeenCalledWith('opportunity', RECORD, ['budgetamount', 'parentcontactid', 'purchasetimeframe']);
+  });
+
+  it('shows "empty" for fields without a value', async () => {
+    renderWith(makeContext());
+    const card = await openStage(1);
+    const row = screen.getByText('Purchase Timeframe').closest('li')!;
+    expect(row).toHaveTextContent('empty');
+    expect(card).toHaveTextContent('$5,000.00');
+  });
+
+  it('a field that fails to load shows "couldn\'t load" and the rest of the card keeps working', async () => {
+    const context = makeContext();
+    (context.loaders!.loadRecordValues as jest.Mock).mockResolvedValue(
+      new Map<string, IFieldValue>([
+        ['budgetamount', { hasValue: true, display: '$5,000.00' }],
+        ['parentcontactid', { hasValue: false, display: null, failed: true }],
+        ['purchasetimeframe', { hasValue: false, display: null, failed: true }],
+      ])
+    );
+    renderWith(context);
+    const card = await openStage(1);
+    expect(screen.getByText('Existing Contact?').closest('li')).toHaveTextContent("couldn't load");
+    expect(card).toHaveTextContent('$5,000.00');
+    expect(card).toHaveTextContent('1/1 filled'); // failed fields aren't counted as empty
+    // A required field that couldn't load is never treated as filled
+    expect(card).toHaveTextContent("Couldn't check required field: Purchase Timeframe");
+    expect(card).not.toHaveTextContent('Required to move on');
+  });
+});
+
 describe('model helpers', () => {
   it('lists names compactly', () => {
     const rows = buildRows(steps, values(), new Map());
@@ -409,7 +463,7 @@ describe('model helpers', () => {
     expect(describeFields({ ...base, framing: 'current', valuesSource: 'error' })).toBe("3 fields. Couldn't load their values.");
   });
 
-  it('skips steps hidden in the BPF designer', () => {
+  it('includes every field of the stage, also ones hidden in the BPF designer', () => {
     const data = JSON.stringify({
       list: [
         { __class: 'StepStep:#X', description: 'Shown', steps: { list: [{ dataFieldName: 'a' }] } },
@@ -417,7 +471,7 @@ describe('model helpers', () => {
         { __class: 'StepStep:#X', description: 'Hidden control', steps: { list: [{ dataFieldName: 'c', isHidden: true }] } },
       ],
     });
-    expect(parseStageSteps(data).map(s => s.fieldName)).toEqual(['a']);
+    expect(parseStageSteps(data).map(s => s.fieldName)).toEqual(['a', 'b', 'c']);
   });
 
   it('collects record lookups from a BPF instance row and resolves stage tables', () => {

@@ -10,6 +10,8 @@ import {
   formatDate,
   daysBetween,
   toFieldValueMap,
+  formatRawValue,
+  isEmptyValue,
 } from '../../utils/stageDetails';
 import { createMockBPFInstance, createMockBPFStage } from '../setup/testUtils';
 import { SAMPLE_CLIENT_DATA } from '../setup/fixtures';
@@ -18,9 +20,9 @@ import { SAMPLE_CLIENT_DATA } from '../setup/fixtures';
 describe('parseStageSteps', () => {
   it('extracts steps with field names, labels and required flags', () => {
     expect(parseStageSteps(SAMPLE_CLIENT_DATA)).toEqual([
-      { fieldName: 'parentcontactid', displayName: 'Existing Contact?', isRequired: false },
-      { fieldName: 'budgetamount', displayName: 'Est. Budget', isRequired: true },
-      { fieldName: 'purchasetimeframe', displayName: 'Purchase Timeframe', isRequired: true },
+      { fieldName: 'parentcontactid', displayName: 'Existing Contact?', controlDisplayName: 'Existing Contact?', isRequired: false },
+      { fieldName: 'budgetamount', displayName: 'Est. Budget', controlDisplayName: undefined, isRequired: true },
+      { fieldName: 'purchasetimeframe', displayName: 'Purchase Timeframe', controlDisplayName: undefined, isRequired: true },
     ]);
   });
 
@@ -28,7 +30,7 @@ describe('parseStageSteps', () => {
     const data = JSON.stringify({
       steps: { list: [{ __class: 'ControlStep:#X', dataFieldName: 'name', controlDisplayName: 'Topic', isRequired: true }] },
     });
-    expect(parseStageSteps(data)).toEqual([{ fieldName: 'name', displayName: 'Topic', isRequired: true }]);
+    expect(parseStageSteps(data)).toEqual([{ fieldName: 'name', displayName: 'Topic', controlDisplayName: 'Topic', isRequired: true }]);
   });
 
   it('de-duplicates repeated steps', () => {
@@ -144,5 +146,24 @@ describe('toFieldValueMap', () => {
 
   it('returns an empty map for null input', () => {
     expect(toFieldValueMap(null).size).toBe(0);
+  });
+});
+
+describe('field value formatting', () => {
+  it('treats null, undefined, empty string and [] as empty', () => {
+    expect([null, undefined, '', []].every(isEmptyValue)).toBe(true);
+    expect([0, false, 'x', [1]].some(isEmptyValue)).toBe(false);
+  });
+
+  it('formats raw values by type when no formatted value exists', () => {
+    expect(formatRawValue(true)).toBe('Yes');
+    expect(formatRawValue(false, 'Boolean')).toBe('No');
+    expect(formatRawValue(1500, 'Money', 'en-US')).toBe('1,500.00');
+    expect(formatRawValue(1500, 'Integer', 'en-US')).toBe('1,500');
+    expect(formatRawValue('2026-10-03', 'DateTime', 'en-US')).toBe('Oct 3, 2026');
+    expect(formatRawValue('Hello')).toBe('Hello');
+    expect(formatRawValue({ name: 'Jane Doe' })).toBe('Jane Doe');
+    expect(formatRawValue([{ name: 'A' }, { name: 'B' }])).toBe('A, B');
+    expect(formatRawValue(null)).toBe('');
   });
 });

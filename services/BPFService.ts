@@ -24,8 +24,9 @@ import { BPFError, ErrorCodes } from '../utils/errorMessages';
 import { isValidEntityName, isValidFieldName, isValidGuid, escapeODataValue } from '../utils/sanitize';
 import { createLogger } from '../utils/logger';
 import type { PerfTracker } from '../utils/perfTracker';
-import { parseStageSteps, getProcessStatus, toFieldValueMap, collectRelatedRecordIds } from '../utils/stageDetails';
-import type { IStageStep, IFieldValue } from '../types';
+import { parseStageSteps, getProcessStatus, toFieldValueMap, collectRelatedRecordIds, isEmptyValue, formatRawValue } from '../utils/stageDetails';
+import { getActiveStageId, getFieldsForStage, normGuid, parseDefinition } from '../utils/processDefinition';
+import type { IStageStep, IFieldValue, IBPFInstance as IInstance } from '../types';
 
 const log = createLogger('[BPFService]');
 
@@ -99,6 +100,8 @@ export class BPFService {
   private categoryLabelsPending: Promise<Map<number, string>> | null = null;
   private activePathCache: Map<string, { stages: IBPFStage[]; timestamp: number }> = new Map();
   private stageStepsCache: Map<string, Promise<IStageStep[]>> = new Map();
+  /** workflow id -> parsed process definition (workflow.clientdata) */
+  private definitionCache: Map<string, Promise<unknown>> = new Map();
   private recordValuesCache: Map<string, { promise: Promise<Map<string, IFieldValue>>; timestamp: number }> = new Map();
 
   constructor(webApi: WebApiClient, clientUrl: string = '') {
@@ -312,18 +315,28 @@ export class BPFService {
     stageDefinitions: IBPFStage[]
   ): IBPFInstance {
     const traversedPath = (bpfRecord.traversedpath as string) || '';
-    const traversedStageIds = traversedPath.split(',').filter(Boolean);
-    const activeStageId = bpfRecord._activestageid_value as string || null;
+    // GUIDs in traversedpath / stage ids can differ in braces or case
+    const traversedStageIds = new Set(traversedPath.split(',').map(normGuid).filter(Boolean));
+    const stageIds = new Set(stageDefinitions.map(s => normGuid(s.stageId)));
+    // Active stage = the traversed path's last entry when it is a stage on this
+    // path; otherwise the instance's activestageid
+    const lastTraversed = getActiveStageId(traversedPath);
+    const activeKey = lastTraversed && stageIds.has(lastTraversed)
+      ? lastTraversed
+      : normGuid(bpfRecord._activestageid_value as string) || null;
+    const activeStage = stageDefinitions.find(s => normGuid(s.stageId) === activeKey);
+    const activeStageId = activeStage?.stageId ?? ((bpfRecord._activestageid_value as string) || null);
     const isFinished = (bpfRecord.statuscode as number) === 2;
 
     // Map stages with completion status
     // When the BPF is finished (statuscode 2 = Inactive/Finished), all stages
     // including the last one are marked as completed with no active stage
     const stages = stageDefinitions.map((stage, index) => {
-      const isActive = !isFinished && stage.stageId === activeStageId;
+      const key = normGuid(stage.stageId);
+      const isActive = !isFinished && key === activeKey;
       const isCompleted = isFinished
-        ? traversedStageIds.includes(stage.stageId) || stage.stageId === activeStageId
-        : traversedStageIds.includes(stage.stageId) && !isActive;
+        ? traversedStageIds.has(key) || key === activeKey
+        : traversedStageIds.has(key) && !isActive;
 
       return {
         ...stage,
@@ -358,6 +371,7 @@ export class BPFService {
       activeStageStartedOn: str('activestagestartedon'),
       modifiedByName: str('_modifiedby_value@OData.Community.Display.V1.FormattedValue'),
       relatedRecordIds: collectRelatedRecordIds(bpfRecord),
+      processDefinitionId: (bpfRecord._processid_value as string) || null,
     };
   }
 
@@ -729,16 +743,65 @@ export class BPFService {
   }
 
   /**
-   * Resolve the steps (fields) of a stage for the hover card.
-   * Uses steps parsed from clientdata when the stage already carries them,
-   * otherwise fetches processstage.clientdata once per stage (cached).
-   * Rejects when the definition can't be loaded.
+   * Every field of a stage, for the hover card — read from the BPF's process
+   * definition (workflow.clientdata), where the stage is found by stageId
+   * (GUIDs normalized) anywhere in the nested tree. Works for any stage,
+   * including ones the record hasn't reached yet.
+   *
+   * The workflow is the instance's _processid_value, or else the workflow of
+   * the instance's BPF table. If the definition can't be read or doesn't
+   * contain the stage, falls back to the stage's own processstage.clientdata.
+   * Rejects only when neither source can be loaded.
    */
-  public getStageSteps(stage: IBPFStage): Promise<IStageStep[]> {
+  public async getStageSteps(stage: IBPFStage, instance?: Pick<IInstance, 'processDefinitionId' | 'bpfEntityName'>): Promise<IStageStep[]> {
+    let processId = normGuid(instance?.processDefinitionId) || null;
+    if (!processId && instance?.bpfEntityName) {
+      processId = normGuid(await this.getProcessId(instance.bpfEntityName).catch(() => null)) || null;
+    }
+
+    if (processId && isValidGuid(processId)) {
+      try {
+        const definition = await this.getProcessDefinition(processId);
+        const fields = getFieldsForStage(definition, stage.stageId);
+        if (fields) return fields;
+        log.warn(`Stage ${stage.stageId} not found in process definition ${processId}; using processstage`);
+      } catch (error) {
+        log.warn(`Process definition ${processId} unavailable; using processstage:`, error);
+      }
+    }
+
+    return this.getStageStepsFromProcessStage(stage);
+  }
+
+  /** Parsed workflow.clientdata for a BPF, fetched once per workflow (failures not cached) */
+  private getProcessDefinition(processId: string): Promise<unknown> {
+    const cached = this.definitionCache.get(processId);
+    if (cached) return cached;
+
+    const request = this.fetchWithTimeout(
+      this.webApi.retrieveRecord('workflow', processId, '?$select=clientdata'),
+      REQUEST_TIMEOUT_MS
+    )
+      .then(entity => {
+        const definition = parseDefinition((entity as { clientdata?: string | null }).clientdata);
+        if (!definition) throw new BPFError('Process definition has no clientdata', ErrorCodes.STAGE_NOT_FOUND);
+        return definition;
+      })
+      .catch(error => {
+        this.definitionCache.delete(processId);
+        throw error;
+      });
+
+    this.definitionCache.set(processId, request);
+    return request;
+  }
+
+  /** Fallback: a stage's own processstage.clientdata (cached per stage) */
+  private getStageStepsFromProcessStage(stage: IBPFStage): Promise<IStageStep[]> {
     if (stage.steps) {
       return Promise.resolve(stage.steps);
     }
-    if (!isValidGuid(stage.stageId)) {
+    if (!isValidGuid(normGuid(stage.stageId))) {
       return Promise.resolve([]);
     }
 
@@ -746,7 +809,7 @@ export class BPFService {
     if (cached) return cached;
 
     const request = this.fetchWithTimeout(
-      this.webApi.retrieveRecord('processstage', stage.stageId, '?$select=clientdata,primaryentitytypecode'),
+      this.webApi.retrieveRecord('processstage', normGuid(stage.stageId), '?$select=clientdata,primaryentitytypecode'),
       REQUEST_TIMEOUT_MS
     )
       .then(entity => parseStageSteps((entity as IProcessStageResponse).clientdata))
@@ -795,10 +858,97 @@ export class BPFService {
   }
 
   /**
+   * Current values of specific columns on a record — only the columns asked
+   * for, never the whole record. Each column is { field, select, attributeType }
+   * where `select` is the Web API name (`_x_value` for lookups).
+   *
+   * One request for all columns; if that fails (e.g. one bad column), each
+   * column is retried on its own, so one failure doesn't hide the others.
+   * A column whose type is unknown is also retried as a lookup. Columns that
+   * still fail come back as { failed: true }. Cached briefly per column set.
+   */
+  public getRecordColumns(
+    entityName: string,
+    recordId: string,
+    columns: Array<{ field: string; select: string; attributeType?: string }>
+  ): Promise<Map<string, IFieldValue>> {
+    const failedAll = () => new Map(columns.map(c => [c.field.toLowerCase(), { hasValue: false, display: null, failed: true }]));
+    const id = normGuid(recordId);
+    if (!isValidEntityName(entityName) || !isValidGuid(id) || columns.length === 0) {
+      return Promise.resolve(columns.length ? failedAll() : new Map());
+    }
+
+    const key = `${entityName}:${id}:${columns.map(c => c.select.toLowerCase()).sort().join(',')}`;
+    const cached = this.recordValuesCache.get(key);
+    if (cached && Date.now() - cached.timestamp < RECORD_VALUES_CACHE_MS) {
+      return cached.promise;
+    }
+
+    const read = (entity: Record<string, unknown>, select: string, attributeType?: string): IFieldValue => {
+      const raw = entity[select];
+      const formatted = entity[`${select}@OData.Community.Display.V1.FormattedValue`];
+      const hasValue = !isEmptyValue(raw);
+      const display = typeof formatted === 'string' && formatted
+        ? formatted
+        : hasValue && !/^_.+_value$/.test(select) ? formatRawValue(raw, attributeType) || null : null;
+      return { hasValue, display };
+    };
+
+    const fetchColumns = (selects: string[]) =>
+      this.fetchWithTimeout(
+        this.webApi.retrieveRecord(entityName, id, `?$select=${selects.join(',')}`),
+        REQUEST_TIMEOUT_MS
+      ) as Promise<Record<string, unknown>>;
+
+    const promise = (async () => {
+      const result = new Map<string, IFieldValue>();
+      const valid = columns.filter(c => isValidFieldName(c.select));
+      for (const c of columns) {
+        if (!valid.includes(c)) result.set(c.field.toLowerCase(), { hasValue: false, display: null, failed: true });
+      }
+      if (valid.length === 0) return result;
+
+      try {
+        const entity = await fetchColumns(valid.map(c => c.select));
+        for (const c of valid) result.set(c.field.toLowerCase(), read(entity, c.select, c.attributeType));
+        return result;
+      } catch (error) {
+        log.warn(`Batch column load failed for ${entityName} ${id}; retrying per column:`, error);
+      }
+
+      await Promise.all(
+        valid.map(async c => {
+          const candidates = [c.select];
+          // Type unknown and plain name failed: it may be a lookup
+          if (!c.attributeType && !/^_.+_value$/.test(c.select)) candidates.push(`_${c.select}_value`);
+          for (const select of candidates) {
+            try {
+              const entity = await fetchColumns([select]);
+              result.set(c.field.toLowerCase(), read(entity, select, c.attributeType));
+              return;
+            } catch {
+              // try the next form
+            }
+          }
+          log.warn(`Couldn't load ${entityName}.${c.field}`);
+          result.set(c.field.toLowerCase(), { hasValue: false, display: null, failed: true });
+        })
+      );
+      // A total failure isn't cached, so the next hover retries
+      if ([...result.values()].every(v => v.failed)) this.recordValuesCache.delete(key);
+      return result;
+    })();
+
+    this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
+    return promise;
+  }
+
+  /**
    * Clear all caches
    */
   public clearCache(): void {
     this.stageStepsCache.clear();
+    this.definitionCache.clear();
     this.recordValuesCache.clear();
     this.stageCache.clear();
     this.workflowCache.clear();

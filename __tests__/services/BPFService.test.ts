@@ -69,7 +69,7 @@ describe('BPFService', () => {
                 name: 'Opportunity Sales Process',
                 _opportunityid_value: recordId,
                 _activestageid_value: 'stage2',
-                traversedpath: 'stage1',
+                traversedpath: 'stage1,stage2', // D365 ends the path with the active stage
                 statuscode: 1,
               },
             ],
@@ -329,7 +329,7 @@ describe('BPFService', () => {
                 businessprocessflowinstanceid: 'bpf-001',
                 _opportunityid_value: recordId,
                 _activestageid_value: 'stage3',
-                traversedpath: 'stage1,stage2',
+                traversedpath: 'stage1,stage2,stage3', // D365 ends the path with the active stage
                 statuscode: 1,
               },
             ],

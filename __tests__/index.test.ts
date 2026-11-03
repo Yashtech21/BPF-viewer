@@ -1325,6 +1325,45 @@ describe('BPFViewerPlus', () => {
       expect(second.get('notonthistable')).toEqual({});
     });
 
+    it("reads stage field values from the grid's row and fetches only the missing columns", async () => {
+      const recordId = '00000000-0000-0000-0000-000000000001';
+      const row = {
+        getRecordId: () => recordId,
+        getNamedReference: () => ({ id: recordId, name: 'Deal', entityType: 'opportunity' }),
+        getValue: jest.fn((c: string) => ({ budgetamount: 5000, closedate: null, isprivate: false } as Record<string, unknown>)[c]),
+        getFormattedValue: jest.fn((c: string) => ({ budgetamount: '$5,000.00', isprivate: 'No' } as Record<string, string>)[c] ?? ''),
+      };
+      const records = context.parameters.records as unknown as Record<string, unknown>;
+      records.records = { [recordId]: row };
+      records.columns = [{ name: 'budgetamount' }, { name: 'closedate' }, { name: 'isprivate' }];
+      (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = jest.fn().mockResolvedValue({
+        Attributes: { get: (n: string) => (n === 'parentcontactid' ? { DisplayName: 'Contact', AttributeType: 6 } : { DisplayName: n, AttributeType: 14 }) },
+      });
+      const retrieveRecord = jest.fn().mockResolvedValue({
+        _parentcontactid_value: 'guid',
+        '_parentcontactid_value@OData.Community.Display.V1.FormattedValue': 'Jane Doe',
+        x_offerlettersent: null,
+      });
+      (context.webAPI as unknown as { retrieveRecord: jest.Mock }).retrieveRecord = retrieveRecord;
+
+      control.init(context, notifyOutputChanged);
+      const { loaders } = control.updateView(context).props;
+      const values = await loaders.loadRecordValues('opportunity', recordId, [
+        'budgetamount', 'closedate', 'isprivate', 'parentcontactid', 'x_offerlettersent',
+      ]);
+
+      // From the dataset row
+      expect(values.get('budgetamount')).toEqual({ hasValue: true, display: '$5,000.00' });
+      expect(values.get('closedate')).toEqual({ hasValue: false, display: null });
+      expect(values.get('isprivate')).toEqual({ hasValue: true, display: 'No' });
+      expect(row.getValue).toHaveBeenCalledWith('budgetamount');
+      // Only the two missing columns were requested; the lookup as _x_value
+      expect(retrieveRecord).toHaveBeenCalledTimes(1);
+      expect(retrieveRecord).toHaveBeenCalledWith('opportunity', recordId, '?$select=_parentcontactid_value,x_offerlettersent');
+      expect(values.get('parentcontactid')).toEqual({ hasValue: true, display: 'Jane Doe' });
+      expect(values.get('x_offerlettersent')).toEqual({ hasValue: false, display: null });
+    });
+
     it('provides localized table names to the hover card', async () => {
       (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = jest
         .fn()
