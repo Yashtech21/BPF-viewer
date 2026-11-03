@@ -21,6 +21,7 @@ import type { StageStatus } from '../designs/hooks/useBPFDesignHelpers';
 import type { IStageDetailsContextValue } from './StageDetailsContext';
 import { findRelatedRecordId, getProcessStatus } from '../../utils/stageDetails';
 import { createLogger } from '../../utils/logger';
+import { withFallback } from '../../utils/async';
 
 const log = createLogger('[StageCard]');
 
@@ -29,27 +30,6 @@ const log = createLogger('[StageCard]');
  * service (which has no timeout of its own) keep the card on "Loading".
  */
 const METADATA_TIMEOUT_MS = 4000;
-
-/** Resolve with `fallback` if `promise` rejects or takes longer than `ms` */
-export function withFallback<T>(promise: Promise<T>, ms: number, fallback: T, what: string): Promise<T> {
-  return new Promise<T>(resolve => {
-    const timer = setTimeout(() => {
-      log.warn(`${what} took over ${ms}ms; continuing without it`);
-      resolve(fallback);
-    }, ms);
-    promise.then(
-      value => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      error => {
-        clearTimeout(timer);
-        log.warn(`${what} failed; continuing without it:`, error);
-        resolve(fallback);
-      }
-    );
-  });
-}
 
 /** Debug-mode timing of each phase (sessionStorage BPF_DEBUG=true) */
 async function timed<T>(what: string, work: () => Promise<T>): Promise<T> {
@@ -263,7 +243,9 @@ export function useStageModel(
   return React.useMemo(() => {
     if (!context) return null;
     const rows = buildRows(state.steps, state.values, state.fieldInfo);
-    const known = rows.filter(r => r.state === 'filled' || r.state === 'empty');
+    // Steps hidden in the BPF designer are listed but never counted or blocking
+    const visible = rows.filter(r => !r.step.isHidden);
+    const known = visible.filter(r => r.state === 'filled' || r.state === 'empty');
     const valuesLoaded = state.valuesSource === 'record' || state.valuesSource === 'related';
     return {
       loading: state.loading,
@@ -275,9 +257,9 @@ export function useStageModel(
       otherTableName: state.otherTableName,
       countable: known.length,
       filled: known.filter(r => r.state === 'filled').length,
-      requiredEmpty: rows.filter(r => r.step.isRequired && r.state === 'empty'),
+      requiredEmpty: visible.filter(r => r.step.isRequired && r.state === 'empty'),
       requiredUnverified: valuesLoaded
-        ? rows.filter(
+        ? visible.filter(
             r => r.step.isRequired && r.step.fieldName && (r.state === 'hidden' || r.state === 'unknown' || r.state === 'failed')
           )
         : [],

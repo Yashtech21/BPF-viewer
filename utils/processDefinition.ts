@@ -87,19 +87,33 @@ export function findStage(clientData: string | unknown, stageId: string): Defini
 export function getStageFields(stage: DefinitionNode | null | undefined): IStageStep[] {
   if (!stage) return [];
   const fields: IStageStep[] = [];
-  const seen = new Set<string>();
+
+  const byName = new Map<string, IStageStep>();
 
   const add = (control: DefinitionNode, step: DefinitionNode | null) => {
     const fieldName = asString(control.dataFieldName).trim();
-    if (!fieldName || seen.has(fieldName.toLowerCase())) return;
-    seen.add(fieldName.toLowerCase());
+    if (!fieldName) return;
+    const isRequired = step?.isProcessRequired === true || control.isProcessRequired === true || control.isRequired === true;
+    const isHidden = control.isHidden === true || step?.isHidden === true;
+
+    // Listed once; a repeat can still make it required or visible
+    const existing = byName.get(fieldName.toLowerCase());
+    if (existing) {
+      existing.isRequired = existing.isRequired || isRequired;
+      if (existing.isHidden && !isHidden) delete existing.isHidden;
+      return;
+    }
+
     const controlDisplayName = asString(control.controlDisplayName).trim();
-    fields.push({
+    const field: IStageStep = {
       fieldName,
       controlDisplayName: controlDisplayName || undefined,
       displayName: controlDisplayName || asString(step?.description).trim() || asString(step?.name).trim() || fieldName,
-      isRequired: step?.isProcessRequired === true || control.isProcessRequired === true || control.isRequired === true,
-    });
+      isRequired,
+      ...(isHidden ? { isHidden: true } : {}),
+    };
+    byName.set(fieldName.toLowerCase(), field);
+    fields.push(field);
   };
 
   const visit = (node: unknown, step: DefinitionNode | null, depth: number): void => {

@@ -9,7 +9,6 @@ import {
   formatDaysShort,
   formatDate,
   daysBetween,
-  toFieldValueMap,
   formatRawValue,
   isEmptyValue,
 } from '../../utils/stageDetails';
@@ -120,35 +119,6 @@ describe('time in stage', () => {
   });
 });
 
-describe('toFieldValueMap', () => {
-  it('maps attributes, lookups and formatted values', () => {
-    const map = toFieldValueMap({
-      name: 'Big deal',
-      budgetamount: 5000,
-      'budgetamount@OData.Community.Display.V1.FormattedValue': '$5,000.00',
-      _parentcontactid_value: '00000000-0000-0000-0000-000000000009',
-      '_parentcontactid_value@OData.Community.Display.V1.FormattedValue': 'Jane Doe',
-      _owninguser_value: '00000000-0000-0000-0000-000000000010',
-      purchasetimeframe: null,
-      isrevenuesystemcalculated: false,
-      description: '',
-    });
-
-    expect(map.get('name')).toEqual({ hasValue: true, display: 'Big deal' });
-    expect(map.get('budgetamount')).toEqual({ hasValue: true, display: '$5,000.00' });
-    expect(map.get('parentcontactid')).toEqual({ hasValue: true, display: 'Jane Doe' });
-    // Lookup without a formatted value never shows a raw GUID
-    expect(map.get('owninguser')).toEqual({ hasValue: true, display: null });
-    expect(map.get('purchasetimeframe')).toEqual({ hasValue: false, display: null });
-    expect(map.get('isrevenuesystemcalculated')).toEqual({ hasValue: true, display: 'No' });
-    expect(map.get('description')).toEqual({ hasValue: false, display: null });
-  });
-
-  it('returns an empty map for null input', () => {
-    expect(toFieldValueMap(null).size).toBe(0);
-  });
-});
-
 describe('field value formatting', () => {
   it('treats null, undefined, empty string and [] as empty', () => {
     expect([null, undefined, '', []].every(isEmptyValue)).toBe(true);
@@ -161,6 +131,10 @@ describe('field value formatting', () => {
     expect(formatRawValue(1500, 'Money', 'en-US')).toBe('1,500.00');
     expect(formatRawValue(1500, 'Integer', 'en-US')).toBe('1,500');
     expect(formatRawValue('2026-10-03', 'DateTime', 'en-US')).toBe('Oct 3, 2026');
+    // A date-only value is a calendar date: never shifted by the user's time zone
+    expect(formatRawValue('2026-01-01', undefined, 'en-US')).toBe('Jan 1, 2026');
+    // A Date at local midnight is shown without a time
+    expect(formatRawValue(new Date(2026, 9, 3), 'DateTime', 'en-US')).toBe('Oct 3, 2026');
     expect(formatRawValue('Hello')).toBe('Hello');
     expect(formatRawValue({ name: 'Jane Doe' })).toBe('Jane Doe');
     expect(formatRawValue([{ name: 'A' }, { name: 'B' }])).toBe('A, B');

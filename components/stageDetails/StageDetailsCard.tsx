@@ -138,6 +138,10 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   },
+  hiddenTag: {
+    color: tokens.colorNeutralForeground3,
+    fontStyle: 'italic',
+  },
   required: {
     color: tokens.colorPaletteRedForeground1,
     marginLeft: '2px',
@@ -391,6 +395,7 @@ const FieldRow: React.FC<{ row: IStageFieldRow; showState: boolean }> = ({ row, 
       {icon}
       <span className={styles.stepName} title={name}>
         {name}
+        {step.isHidden && <span className={styles.hiddenTag}> (hidden in BPF)</span>}
         {step.isRequired && (
           <span className={styles.required}>
             <span aria-hidden="true">*</span>

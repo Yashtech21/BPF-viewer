@@ -24,7 +24,7 @@ import { BPFError, ErrorCodes } from '../utils/errorMessages';
 import { isValidEntityName, isValidFieldName, isValidGuid, escapeODataValue } from '../utils/sanitize';
 import { createLogger } from '../utils/logger';
 import type { PerfTracker } from '../utils/perfTracker';
-import { parseStageSteps, getProcessStatus, toFieldValueMap, collectRelatedRecordIds, isEmptyValue, formatRawValue } from '../utils/stageDetails';
+import { parseStageSteps, getProcessStatus, collectRelatedRecordIds, isEmptyValue, formatRawValue } from '../utils/stageDetails';
 import { getActiveStageId, getFieldsForStage, normGuid, parseDefinition } from '../utils/processDefinition';
 import type { IStageStep, IFieldValue, IBPFInstance as IInstance } from '../types';
 
@@ -82,8 +82,9 @@ function toStage(stage: IProcessStageResponse, index: number, categoryLabels: Ma
   if (stage.primaryentitytypecode) {
     mapped.entityName = stage.primaryentitytypecode;
   }
-  if (typeof stage.clientdata === 'string') {
-    mapped.steps = parseStageSteps(stage.clientdata);
+  if (typeof stage.clientdata === 'string' && stage.clientdata) {
+    // Kept raw: parsed only if the hover card falls back to it
+    mapped.clientData = stage.clientdata;
   }
   return mapped;
 }
@@ -318,12 +319,19 @@ export class BPFService {
     // GUIDs in traversedpath / stage ids can differ in braces or case
     const traversedStageIds = new Set(traversedPath.split(',').map(normGuid).filter(Boolean));
     const stageIds = new Set(stageDefinitions.map(s => normGuid(s.stageId)));
-    // Active stage = the traversed path's last entry when it is a stage on this
-    // path; otherwise the instance's activestageid
+    // Active stage: the instance's activestageid when the traversed path confirms
+    // it (D365's own BPF bar follows activestageid); otherwise the path's last
+    // entry when it's a stage on this path; otherwise activestageid as-is.
+    // Normally all three agree; they differ if activestageid was changed without
+    // the path (integrations) or the path wasn't trimmed on "Back".
+    const declared = normGuid(bpfRecord._activestageid_value as string) || null;
     const lastTraversed = getActiveStageId(traversedPath);
-    const activeKey = lastTraversed && stageIds.has(lastTraversed)
-      ? lastTraversed
-      : normGuid(bpfRecord._activestageid_value as string) || null;
+    const activeKey =
+      declared && stageIds.has(declared) && traversedStageIds.has(declared)
+        ? declared
+        : lastTraversed && stageIds.has(lastTraversed)
+          ? lastTraversed
+          : declared;
     const activeStage = stageDefinitions.find(s => normGuid(s.stageId) === activeKey);
     const activeStageId = activeStage?.stageId ?? ((bpfRecord._activestageid_value as string) || null);
     const isFinished = (bpfRecord.statuscode as number) === 2;
@@ -801,6 +809,9 @@ export class BPFService {
     if (stage.steps) {
       return Promise.resolve(stage.steps);
     }
+    if (stage.clientData) {
+      return Promise.resolve(parseStageSteps(stage.clientData));
+    }
     if (!isValidGuid(normGuid(stage.stageId))) {
       return Promise.resolve([]);
     }
@@ -823,38 +834,6 @@ export class BPFService {
 
     this.stageStepsCache.set(stage.stageId, request);
     return request;
-  }
-
-  /**
-   * Load a record's attribute values so the hover card can show which
-   * stage fields are filled in. Cached briefly per record.
-   * Rejects on failure (invalid input resolves to an empty map).
-   */
-  public getRecordValues(entityName: string, recordId: string): Promise<Map<string, IFieldValue>> {
-    if (!isValidEntityName(entityName) || !isValidGuid(recordId)) {
-      return Promise.resolve(new Map());
-    }
-
-    const key = `${entityName}:${recordId}`;
-    const cached = this.recordValuesCache.get(key);
-    if (cached && Date.now() - cached.timestamp < RECORD_VALUES_CACHE_MS) {
-      return cached.promise;
-    }
-
-    const promise = this.fetchWithTimeout(
-      this.webApi.retrieveRecord(entityName, recordId),
-      REQUEST_TIMEOUT_MS
-    )
-      .then(entity => toFieldValueMap(entity as Record<string, unknown>) as Map<string, IFieldValue>)
-      .catch(error => {
-        log.warn(`Failed to load values for ${entityName} ${recordId}:`, error);
-        // Rethrow: an empty map would read as "every field is empty"
-        this.recordValuesCache.delete(key);
-        throw error;
-      });
-
-    this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
-    return promise;
   }
 
   /**
@@ -913,6 +892,13 @@ export class BPFService {
         for (const c of valid) result.set(c.field.toLowerCase(), read(entity, c.select, c.attributeType));
         return result;
       } catch (error) {
+        // Only a bad column (400) is worth retrying column by column; for no
+        // access, timeouts or network errors every retry would fail the same way
+        if (!isBadColumnError(error)) {
+          log.warn(`Column load failed for ${entityName} ${id}:`, error);
+          for (const c of valid) result.set(c.field.toLowerCase(), { hasValue: false, display: null, failed: true });
+          return result;
+        }
         log.warn(`Batch column load failed for ${entityName} ${id}; retrying per column:`, error);
       }
 
@@ -934,10 +920,12 @@ export class BPFService {
           result.set(c.field.toLowerCase(), { hasValue: false, display: null, failed: true });
         })
       );
-      // A total failure isn't cached, so the next hover retries
-      if ([...result.values()].every(v => v.failed)) this.recordValuesCache.delete(key);
       return result;
-    })();
+    })().then(result => {
+      // Never keep a failure: the next hover retries any field that couldn't load
+      if ([...result.values()].some(v => v.failed)) this.recordValuesCache.delete(key);
+      return result;
+    });
 
     this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
     return promise;
@@ -969,4 +957,16 @@ export class BPFService {
     // so we clear all entries as we can't map instance -> BPF entity
     this.activePathCache.clear();
   }
+}
+
+/**
+ * A Web API error caused by a column that doesn't exist / isn't selectable
+ * (HTTP 400, "Could not find a property named ..."), as opposed to access,
+ * timeout or network errors.
+ */
+export function isBadColumnError(error: unknown): boolean {
+  const e = error as { status?: number; statusCode?: number; httpStatusCode?: number; errorCode?: number; message?: string } | null;
+  if (!e) return false;
+  if (e.status === 400 || e.statusCode === 400 || e.httpStatusCode === 400) return true;
+  return /could not find a property|property named|not a valid|invalid column|\b400\b/i.test(String(e.message ?? error));
 }

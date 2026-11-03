@@ -443,6 +443,21 @@ describe('stage fields and values (definition + record)', () => {
   });
 });
 
+describe('hidden steps', () => {
+  it('lists a hidden step but never counts it or names it as blocking', async () => {
+    const context = makeContext();
+    (context.loaders!.loadStageSteps as jest.Mock).mockResolvedValue([
+      { fieldName: 'budgetamount', displayName: 'Est. Budget', isRequired: true },
+      { fieldName: 'purchasetimeframe', displayName: 'Purchase Timeframe', isRequired: true, isHidden: true },
+    ]);
+    renderWith(context);
+    const card = await openStage(1);
+    expect(card).toHaveTextContent('Purchase Timeframe (hidden in BPF)');
+    expect(card).toHaveTextContent('1/1 filled');
+    expect(card).not.toHaveTextContent('Required to move on');
+  });
+});
+
 describe('model helpers', () => {
   it('lists names compactly', () => {
     const rows = buildRows(steps, values(), new Map());

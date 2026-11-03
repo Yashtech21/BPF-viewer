@@ -52,6 +52,24 @@ describe('process definition (workflow.clientdata)', () => {
     expect(getStageFields(branch).map(f => f.fieldName)).toEqual(['own']);
   });
 
+  it('lists a repeated field once, keeping it required if any occurrence is', () => {
+    const stage = {
+      steps: { list: [
+        { __class: 'StepStep:#X', description: 'A', isProcessRequired: false, steps: { list: [{ dataFieldName: 'x_a' }] } },
+        { __class: 'StepStep:#X', description: 'A again', isProcessRequired: true, steps: { list: [{ dataFieldName: 'X_A' }] } },
+      ] },
+    };
+    expect(getStageFields(stage)).toEqual([{ fieldName: 'x_a', controlDisplayName: undefined, displayName: 'A', isRequired: true }]);
+  });
+
+  it('flags steps hidden in the BPF designer', () => {
+    const stage = { steps: { list: [
+      { __class: 'StepStep:#X', description: 'Shown', steps: { list: [{ dataFieldName: 'x_shown' }] } },
+      { __class: 'StepStep:#X', description: 'Hidden', isHidden: true, steps: { list: [{ dataFieldName: 'x_hidden' }] } },
+    ] } };
+    expect(getStageFields(stage).map(f => [f.fieldName, !!f.isHidden])).toEqual([['x_shown', false], ['x_hidden', true]]);
+  });
+
   it('works for any stage, not only the active one', () => {
     expect(getFieldsForStage(SYNTHETIC_PROCESS_DEFINITION, '77777777-7777-4777-8777-777777777777')!.map(f => f.fieldName)).toEqual(['x_closed']);
   });

@@ -1364,6 +1364,21 @@ describe('BPFViewerPlus', () => {
       expect(values.get('x_offerlettersent')).toEqual({ hasValue: false, display: null });
     });
 
+    it('shares one metadata request between concurrent lookups of the same fields', async () => {
+      const getEntityMetadata = jest.fn().mockResolvedValue({ Attributes: { get: () => ({ DisplayName: 'X', AttributeType: 14 }) } });
+      (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = getEntityMetadata;
+      control.init(context, notifyOutputChanged);
+      const { loaders } = control.updateView(context).props;
+
+      const [a, b] = await Promise.all([
+        loaders.loadFieldInfo('opportunity', ['x_a', 'x_b']),
+        loaders.loadFieldInfo('opportunity', ['x_b']),
+      ]);
+      expect(getEntityMetadata).toHaveBeenCalledTimes(1);
+      expect(a.get('x_a')).toEqual({ displayName: 'X', isSecured: false, attributeType: 'String' });
+      expect(b.get('x_b')).toEqual({ displayName: 'X', isSecured: false, attributeType: 'String' });
+    });
+
     it('provides localized table names to the hover card', async () => {
       (context.utils as unknown as { getEntityMetadata: jest.Mock }).getEntityMetadata = jest
         .fn()

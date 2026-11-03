@@ -149,40 +149,6 @@ export function daysBetween(from: string | null | undefined, to: string | null |
 }
 
 // ============================================
-// Record values
-// ============================================
-
-const FORMATTED_SUFFIX = '@OData.Community.Display.V1.FormattedValue';
-
-/**
- * Convert a raw Web API entity into a field → value map.
- * Lookups (`_x_value`) are exposed under their attribute logical name `x`
- * so they can be matched against step dataFieldName values.
- */
-export function toFieldValueMap(entity: Record<string, unknown> | null | undefined): Map<string, { hasValue: boolean; display: string | null }> {
-  const map = new Map<string, { hasValue: boolean; display: string | null }>();
-  if (!entity) return map;
-
-  for (const key of Object.keys(entity)) {
-    if (key.includes('@')) continue;
-    const raw = entity[key];
-    const formatted = entity[`${key}${FORMATTED_SUFFIX}`];
-    const hasValue = raw !== null && raw !== undefined && raw !== '';
-    const isLookup = /^_.+_value$/.test(key);
-    let display: string | null = null;
-    if (typeof formatted === 'string' && formatted) {
-      display = formatted;
-    } else if (!isLookup && hasValue && (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean')) {
-      display = typeof raw === 'boolean' ? (raw ? 'Yes' : 'No') : String(raw);
-    }
-
-    const logicalName = /^_(.+)_value$/.exec(key)?.[1] ?? key;
-    map.set(logicalName.toLowerCase(), { hasValue, display });
-  }
-  return map;
-}
-
-// ============================================
 // Cross-entity stages
 // ============================================
 
@@ -270,6 +236,17 @@ export function isEmptyValue(raw: unknown): boolean {
 }
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T[\d:.]+(Z|[+-]\d{2}:?\d{2})?)?$/;
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Format a calendar date (no time zone involved) */
+function formatCalendarDate(year: number, month: number, day: number, locale?: string): string {
+  const date = new Date(year, month - 1, day); // local midnight of that calendar day
+  try {
+    return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short', day: 'numeric' }).format(date);
+  } catch {
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  }
+}
 
 /**
  * Display text for a raw value when the platform gave no formatted value.
@@ -280,10 +257,20 @@ export function formatRawValue(raw: unknown, attributeType?: string, locale?: st
   if (isEmptyValue(raw)) return '';
   const type = (attributeType ?? '').toLowerCase();
   if (typeof raw === 'boolean') return raw ? 'Yes' : 'No';
-  if (raw instanceof Date) return formatDate(raw.toISOString(), type !== 'dateonly', locale);
-  if (typeof raw === 'string' && (type === 'datetime' || ISO_DATE_RE.test(raw))) {
-    const formatted = formatDate(raw, raw.includes('T'), locale);
-    if (formatted) return formatted;
+  if (raw instanceof Date) {
+    // Midnight local time = a date-only value: don't print a time
+    const hasTime = raw.getHours() !== 0 || raw.getMinutes() !== 0;
+    return formatDate(raw.toISOString(), hasTime, locale);
+  }
+  if (typeof raw === 'string') {
+    // Date-only ("2026-10-03") is a calendar date, not UTC midnight: parsing it as
+    // UTC and showing local time would print the previous day west of UTC
+    const dateOnly = DATE_ONLY_RE.exec(raw);
+    if (dateOnly) return formatCalendarDate(+dateOnly[1], +dateOnly[2], +dateOnly[3], locale);
+    if (type === 'datetime' || ISO_DATE_RE.test(raw)) {
+      const formatted = formatDate(raw, raw.includes('T'), locale);
+      if (formatted) return formatted;
+    }
   }
   if (typeof raw === 'number') {
     try {

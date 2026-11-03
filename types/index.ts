@@ -108,6 +108,8 @@ export interface IBPFStage {
    * Undefined means "not loaded yet" — they are fetched lazily on hover.
    */
   steps?: IStageStep[];
+  /** Raw processstage.clientdata, kept unparsed until the hover card needs it as a fallback */
+  clientData?: string;
 }
 
 /** A single step (data field) inside a BPF stage */
@@ -118,6 +120,8 @@ export interface IStageStep {
   displayName: string;
   /** The ControlStep's own controlDisplayName, when set */
   controlDisplayName?: string;
+  /** Hidden in the BPF designer: listed, but not counted toward fill or "required to move on" */
+  isHidden?: boolean;
   /** Whether the step is required to move to the next stage */
   isRequired: boolean;
 }

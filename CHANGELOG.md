@@ -5,6 +5,22 @@ All notable changes to the Business Process Flow Viewer will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-11-03
+
+### Fixed
+
+- Date-only values without a formatted value no longer show the previous day west of UTC.
+- A failed column load retries column by column only for bad-column errors (400); access, timeout and
+  network errors mark the fields "couldn't load" at once instead of firing many slow retries.
+- Results with a failed field are never cached, so hovering again retries it.
+- Active stage: activestageid wins when the traversed path contains it (matches D365's BPF bar if the
+  path wasn't trimmed on "Back"); otherwise the path's last entry.
+- A field repeated in a stage stays required if any occurrence is.
+- Steps hidden in the BPF designer are listed (marked "hidden in BPF") but not counted or blocking.
+- Concurrent metadata lookups for the same fields share one request; the field-type timeout timer is cleared.
+- processstage clientdata is no longer parsed for every stage on load (only when the card falls back to it);
+  the unused whole-record value loader was removed.
+
 ## [1.3.0] - 2026-11-03
 
 ### Changed

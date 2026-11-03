@@ -5,7 +5,7 @@
  *  - record values for step completion
  */
 
-import { BPFService } from '../../services/BPFService';
+import { BPFService, isBadColumnError } from '../../services/BPFService';
 import { createMockWebAPI } from '../setup/testUtils';
 import { SAMPLE_CLIENT_DATA, SYNTHETIC_PROCESS_DEFINITION, SYNTH_STAGE_ID } from '../setup/fixtures';
 import type { IBPFConfiguration, IBPFStage } from '../../types';
@@ -102,13 +102,19 @@ describe('BPFService stage details', () => {
       expect(instance.modifiedByName).toBe('Jane Doe');
     });
 
-    it('parses steps and entity from RetrieveActivePath clientdata', async () => {
+    it('keeps RetrieveActivePath clientdata unparsed until the card falls back to it', async () => {
       mockInstance({ statuscode: 1 });
       const instance = (await service.getBPFDataForRecords([RECORD_ID], config)).get(RECORD_ID)!;
 
       expect(instance.stages[0].entityName).toBe('opportunity');
-      expect(instance.stages[0].steps).toHaveLength(3);
-      expect(instance.stages[0].steps![1]).toEqual({ fieldName: 'budgetamount', displayName: 'Est. Budget', isRequired: true });
+      expect(instance.stages[0].steps).toBeUndefined(); // not parsed on load
+      expect(instance.stages[0].clientData).toBe(SAMPLE_CLIENT_DATA);
+
+      // Fallback path (no process definition available) parses it, without a request
+      (webApi.retrieveRecord as jest.Mock).mockClear();
+      const steps = await service.getStageSteps(instance.stages[0]);
+      expect(steps[1]).toMatchObject({ fieldName: 'budgetamount', displayName: 'Est. Budget', isRequired: true });
+      expect(webApi.retrieveRecord).not.toHaveBeenCalledWith('processstage', expect.anything(), expect.anything());
     });
 
     it('marks aborted processes', async () => {
@@ -287,7 +293,7 @@ describe('BPFService stage details', () => {
   });
 
   describe('active stage from traversedpath', () => {
-    it('marks the last traversed stage active, comparing GUIDs without braces/case', async () => {
+    it('uses the last traversed stage when activestageid is not on the traversed path (GUIDs normalized)', async () => {
       const A = 'aaaaaaaa-0000-4000-8000-000000000001';
       const B = 'bbbbbbbb-0000-4000-8000-000000000002';
       const C = 'cccccccc-0000-4000-8000-000000000003';
@@ -295,8 +301,8 @@ describe('BPFService stage details', () => {
         entities: [{
           businessprocessflowinstanceid: INSTANCE_ID,
           _opportunityid_value: RECORD_ID,
-          // activestageid disagrees; traversedpath's last entry wins
-          _activestageid_value: A,
+          // activestageid points at a stage the path doesn't contain: the path's last entry wins
+          _activestageid_value: C,
           traversedpath: `{${A.toUpperCase()}},{${B.toUpperCase()}}`,
           statuscode: 1,
           _processid_value: 'dddddddd-0000-4000-8000-000000000004',
@@ -311,6 +317,31 @@ describe('BPFService stage details', () => {
       expect(instance.stages.map(s => [s.isCompleted, s.isActive])).toEqual([[true, false], [false, true], [false, false]]);
       expect(instance.activeStageId).toBe(B);
       expect(instance.processDefinitionId).toBe('dddddddd-0000-4000-8000-000000000004');
+    });
+  });
+
+  describe('active stage when the path was not trimmed on "Back"', () => {
+    it("prefers activestageid when the traversed path contains it (D365's BPF bar follows it)", async () => {
+      const A = 'aaaaaaaa-0000-4000-8000-000000000001';
+      const B = 'bbbbbbbb-0000-4000-8000-000000000002';
+      const C = 'cccccccc-0000-4000-8000-000000000003';
+      webApi.retrieveMultipleRecords.mockResolvedValue({
+        entities: [{
+          businessprocessflowinstanceid: INSTANCE_ID,
+          _opportunityid_value: RECORD_ID,
+          _activestageid_value: `{${B.toUpperCase()}}`, // moved back to B
+          traversedpath: `${A},${B},${C}`, // path still ends with C
+          statuscode: 1,
+        }],
+      });
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ value: [A, B, C].map((id, i) => ({ processstageid: id, stagename: `S${i + 1}`, stagecategory: 0 })) }),
+      }) as unknown as typeof fetch;
+
+      const instance = (await service.getBPFDataForRecords([RECORD_ID], config)).get(RECORD_ID)!;
+      expect(instance.stages.map(s => s.isActive)).toEqual([false, true, false]);
+      expect(instance.activeStageId).toBe(B);
     });
   });
 
@@ -352,6 +383,32 @@ describe('BPFService stage details', () => {
       ]);
       expect(values.get('x_ok')).toEqual({ hasValue: true, display: 'fine' });
       expect(values.get('x_broken')).toEqual({ hasValue: false, display: null, failed: true });
+    });
+
+    it('does not retry column by column on access/timeout errors', async () => {
+      webApi.retrieveRecord = jest.fn().mockRejectedValue(Object.assign(new Error('Principal user is missing prvReadx_thing privilege'), { status: 403 }));
+      const values = await service.getRecordColumns('opportunity', RECORD_ID, [
+        { field: 'a', select: 'a' },
+        { field: 'b', select: 'b' },
+        { field: 'c', select: 'c' },
+      ]);
+      expect(webApi.retrieveRecord).toHaveBeenCalledTimes(1);
+      expect([...values.values()].every(v => v.failed)).toBe(true);
+    });
+
+    it('never caches a result with a failed column: the next hover retries it', async () => {
+      let broken = true;
+      webApi.retrieveRecord = jest.fn().mockImplementation((_e: string, _id: string, query: string) => {
+        if (broken && query.includes('x_flaky')) return Promise.reject(new Error('400 Could not find a property named x_flaky'));
+        return Promise.resolve({ x_ok: 'fine', x_flaky: 'now ok' });
+      });
+      const cols = [
+        { field: 'x_ok', select: 'x_ok', attributeType: 'String' },
+        { field: 'x_flaky', select: 'x_flaky', attributeType: 'String' },
+      ];
+      expect((await service.getRecordColumns('opportunity', RECORD_ID, cols)).get('x_flaky')?.failed).toBe(true);
+      broken = false;
+      expect((await service.getRecordColumns('opportunity', RECORD_ID, cols)).get('x_flaky')).toEqual({ hasValue: true, display: 'now ok' });
     });
 
     it('retries a column of unknown type as a lookup', async () => {
@@ -405,34 +462,14 @@ describe('BPFService stage details', () => {
     });
   });
 
-  describe('getRecordValues', () => {
-    it('loads and caches the record values', async () => {
-      (webApi.retrieveRecord as jest.Mock).mockResolvedValue({
-        budgetamount: 10,
-        'budgetamount@OData.Community.Display.V1.FormattedValue': '$10.00',
-      });
+});
 
-      const values = await service.getRecordValues('opportunity', RECORD_ID);
-      await service.getRecordValues('opportunity', RECORD_ID);
-
-      expect(values.get('budgetamount')).toEqual({ hasValue: true, display: '$10.00' });
-      expect(webApi.retrieveRecord).toHaveBeenCalledTimes(1);
-      expect(webApi.retrieveRecord).toHaveBeenCalledWith('opportunity', RECORD_ID);
-    });
-
-    it('rejects on failure (never "all empty"), resolves empty for invalid input', async () => {
-      (webApi.retrieveRecord as jest.Mock).mockRejectedValue(new Error('nope'));
-      await expect(service.getRecordValues('opportunity', RECORD_ID)).rejects.toThrow('nope');
-      await expect(service.getRecordValues('bad name!', RECORD_ID)).resolves.toEqual(new Map());
-      await expect(service.getRecordValues('opportunity', 'not-a-guid')).resolves.toEqual(new Map());
-    });
-
-    it('is cleared by clearCache', async () => {
-      (webApi.retrieveRecord as jest.Mock).mockResolvedValue({});
-      await service.getRecordValues('opportunity', RECORD_ID);
-      service.clearCache();
-      await service.getRecordValues('opportunity', RECORD_ID);
-      expect(webApi.retrieveRecord).toHaveBeenCalledTimes(2);
-    });
+describe('isBadColumnError', () => {
+  it('recognizes bad-column errors only', () => {
+    expect(isBadColumnError({ status: 400 })).toBe(true);
+    expect(isBadColumnError(new Error("Could not find a property named 'x_typo' on type 'Microsoft.Dynamics.CRM.opportunity'"))).toBe(true);
+    expect(isBadColumnError({ status: 403, message: 'no privilege' })).toBe(false);
+    expect(isBadColumnError(new Error('Request timed out'))).toBe(false);
+    expect(isBadColumnError(null)).toBe(false);
   });
 });

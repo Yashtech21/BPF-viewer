@@ -39,6 +39,7 @@ import { runQueue } from './utils/taskQueue';
 import { ViewStore } from './utils/viewStore';
 import { readAttributeInfo, isLookupType } from './utils/fieldMetadata';
 import { formatRawValue, isEmptyValue } from './utils/stageDetails';
+import { withFallback } from './utils/async';
 
 /**
  * How many records are fetched in parallel. Rows still update one by one as
@@ -66,6 +67,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private entityDisplayNameCache: Map<string, string> = new Map();
   /** entity|field -> field metadata (display name, field security) */
   private fieldInfoCache: Map<string, IFieldInfo> = new Map();
+  /** entity|field -> in-flight metadata request covering that field */
+  private fieldInfoPending: Map<string, Promise<void>> = new Map();
 
   // Request cancellation support
   private abortController: AbortController | null = null;
@@ -506,10 +509,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     if (missing.length > 0) {
       // Types tell us which columns are lookups (selected as _x_value); don't wait long for them
-      const info = await Promise.race([
-        this.getFieldInfo(entityName, missing),
-        new Promise<Map<string, IFieldInfo>>(resolve => setTimeout(() => resolve(new Map()), 4000)),
-      ]);
+      const info = await withFallback(this.getFieldInfo(entityName, missing), 4000, new Map<string, IFieldInfo>(), `Field types for ${entityName}`);
       const fetched = await this.bpfService.getRecordColumns(
         entityName,
         recordId,
@@ -533,19 +533,30 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private async getFieldInfo(entityName: string, fieldNames: string[]): Promise<Map<string, IFieldInfo>> {
     const result = new Map<string, IFieldInfo>();
     const names = [...new Set(fieldNames.map(f => f.toLowerCase()).filter(Boolean))];
-    const missing = names.filter(f => !this.fieldInfoCache.has(`${entityName}|${f}`));
+    const key = (f: string) => `${entityName}|${f}`;
+    // Fields already being fetched by a concurrent call share that request
+    const waiting = names.filter(f => !this.fieldInfoCache.has(key(f)) && this.fieldInfoPending.has(key(f)));
+    const missing = names.filter(f => !this.fieldInfoCache.has(key(f)) && !this.fieldInfoPending.has(key(f)));
 
     if (missing.length > 0 && isValidEntityName(entityName) && this.context.utils?.getEntityMetadata) {
-      try {
-        const metadata = await this.context.utils.getEntityMetadata(entityName, missing);
-        for (const field of missing) {
-          // Cache misses too (as {}), so unknown fields aren't re-requested on every hover
-          this.fieldInfoCache.set(`${entityName}|${field}`, readAttributeInfo(metadata, field) ?? {});
+      // Deferred by a microtask so the pending entries below exist before it can settle
+      const request = Promise.resolve().then(async () => {
+        try {
+          const metadata = await this.context.utils.getEntityMetadata(entityName, missing);
+          for (const field of missing) {
+            // Cache misses too (as {}), so unknown fields aren't re-requested on every hover
+            this.fieldInfoCache.set(key(field), readAttributeInfo(metadata, field) ?? {});
+          }
+        } catch (e) {
+          logger.warn(`Field metadata unavailable for ${entityName}:`, e);
+        } finally {
+          for (const field of missing) this.fieldInfoPending.delete(key(field));
         }
-      } catch (e) {
-        logger.warn(`Field metadata unavailable for ${entityName}:`, e);
-      }
+      });
+      for (const field of missing) this.fieldInfoPending.set(key(field), request);
+      waiting.push(...missing);
     }
+    await Promise.all([...new Set(waiting.map(f => this.fieldInfoPending.get(key(f))).filter(Boolean))]);
 
     for (const field of names) {
       const info = this.fieldInfoCache.get(`${entityName}|${field}`);
