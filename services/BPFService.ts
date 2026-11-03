@@ -870,7 +870,7 @@ export class BPFService {
       const display = typeof formatted === 'string' && formatted
         ? formatted
         : hasValue && !/^_.+_value$/.test(select) ? formatRawValue(raw, attributeType) || null : null;
-      return { hasValue, display };
+      return hasValue ? { hasValue, display, raw } : { hasValue, display };
     };
 
     const fetchColumns = (selects: string[]) =>
@@ -929,6 +929,22 @@ export class BPFService {
 
     this.recordValuesCache.set(key, { promise, timestamp: Date.now() });
     return promise;
+  }
+
+  /**
+   * Run a FetchXML query through the Web API (the configured form-subgrid
+   * filter). Returns the matching rows as the Web API returns them.
+   */
+  public async executeFetchXml(entityName: string, fetchXml: string, signal?: AbortSignal): Promise<ComponentFramework.WebApi.Entity[]> {
+    if (!isValidEntityName(entityName)) {
+      throw new BPFError(`Invalid entity name in FetchXML: ${entityName}`, ErrorCodes.VALIDATION_ERROR);
+    }
+    const response = await this.fetchWithTimeout(
+      this.webApi.retrieveMultipleRecords(entityName, `?fetchXml=${encodeURIComponent(fetchXml)}`),
+      REQUEST_TIMEOUT_MS,
+      signal
+    );
+    return response.entities ?? [];
   }
 
   /**

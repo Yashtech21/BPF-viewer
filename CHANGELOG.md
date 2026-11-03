@@ -5,6 +5,18 @@ All notable changes to the Business Process Flow Viewer will be documented in th
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-11-03
+
+### Added
+
+- Optional **Form Subgrid FetchXML** property (`subgridFetchXml`, not required, empty by default). On a
+  form subgrid, the FetchXML's `{placeholders}` are filled from the form's saved record (`{id}` = the
+  record id; `{field}` = that field's value, lookups as GUIDs, option sets as numbers), the query runs
+  through the Web API, and its results replace the subgrid's rows (BPF stages, hover cards and toolbar
+  work as usual). Ignored in views/home grids, on unsaved forms and when empty. Values are XML-escaped;
+  an empty placeholder shows "No records to show: <Field> is empty on this record."; invalid FetchXML
+  shows an error; queries without `top`/`count` are capped at 250 rows.
+
 ## [1.3.1] - 2026-11-03
 
 ### Fixed

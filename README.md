@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.1-blue?style=for-the-badge" alt="Version" />
+  <img src="https://img.shields.io/badge/version-1.4.0-blue?style=for-the-badge" alt="Version" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="License" />
   <a href="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/ci.yml"><img src="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/cd.yml"><img src="https://github.com/allandecastro/business-process-flow-viewer/actions/workflows/cd.yml/badge.svg" alt="CD" /></a>
@@ -203,6 +203,50 @@ The `parametersBPF` property accepts a JSON configuration that tells the control
 
 Multiple BPF definitions can be configured for entities with more than one business process flow.
 
+### Form Subgrid FetchXML (optional)
+
+When the control is a **subgrid on a form**, you can replace the subgrid's rows with your own FetchXML
+query, filtered by the form's record. Set the optional **Form Subgrid FetchXML** property
+(`subgridFetchXml`). It is ignored in views (home grids), on dashboards, on unsaved forms and when empty.
+
+Placeholders are replaced with the **saved** values of the form's record:
+
+| Placeholder | Becomes |
+|---|---|
+| `{id}` | The form record's id |
+| `{fieldname}` (e.g. `{new_recruitsource}`, `{ownerid}`, `{createdby}`) | That field's value on the form record: GUID for lookups/owner, number for option sets, `1`/`0` for yes/no |
+
+Values are XML-escaped. If a placeholder is empty on the record, the subgrid shows
+"No records to show: <Field> is empty on this record." instead of running the query. A query without
+`top` or `count` is capped at 250 rows. The query's entity should be the table your BPF configuration
+points at (e.g. `opportunity`), so stages resolve.
+
+**Records with the same Recruit Source as the current record** (excluding itself):
+
+```xml
+<fetch>
+  <entity name="opportunity">
+    <filter>
+      <condition attribute="new_recruitsource" operator="eq" value="{new_recruitsource}" />
+      <condition attribute="opportunityid" operator="ne" value="{id}" />
+    </filter>
+  </entity>
+</fetch>
+```
+
+**Top 5 recently created records** (owned by the same user):
+
+```xml
+<fetch top="5">
+  <entity name="opportunity">
+    <order attribute="createdon" descending="true" />
+    <filter>
+      <condition attribute="ownerid" operator="eq" value="{ownerid}" />
+    </filter>
+  </entity>
+</fetch>
+```
+
 ### All Properties
 
 | Property | Type | Default | Description |
@@ -218,6 +262,7 @@ Multiple BPF definitions can be configured for entities with more than one busin
 | `showToolbar` | Enum | `yes` | Search, filter, sort and per-stage counts above the list |
 | `stageAgeWarningDays` | Whole number | _(empty)_ | Flag records in their current stage for at least N days (red at 2N). Empty/0 disables |
 | `density` | Enum | `comfortable` | Row spacing: `comfortable` or `compact` |
+| `subgridFetchXml` | Multiple (text) | _(empty)_ | Optional. On a form subgrid, a FetchXML query (with `{placeholders}` from the form record) whose results replace the subgrid rows. Ignored in views |
 | `showPulseAnimation` | Enum | `yes` | Subtle animation on active stage |
 | `usePlatformTheme` | Enum | `yes` | Use Dataverse environment theme colors |
 | `completedColor` | String | `#107C10` | Completed stage background color |

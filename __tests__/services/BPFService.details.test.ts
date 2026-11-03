@@ -365,10 +365,10 @@ describe('BPFService stage details', () => {
       ]);
       expect(webApi.retrieveRecord).toHaveBeenCalledTimes(1);
       expect(webApi.retrieveRecord).toHaveBeenCalledWith('opportunity', RECORD_ID, '?$select=x_amount,x_sent,x_start,_x_owner_value,x_note');
-      expect(values.get('x_amount')).toEqual({ hasValue: true, display: '$1,500.00' });
-      expect(values.get('x_sent')).toEqual({ hasValue: true, display: 'Yes' });
+      expect(values.get('x_amount')).toEqual({ hasValue: true, display: '$1,500.00', raw: 1500 });
+      expect(values.get('x_sent')).toEqual({ hasValue: true, display: 'Yes', raw: true });
       expect(values.get('x_start')?.display).toMatch(/2026/);
-      expect(values.get('x_owner')).toEqual({ hasValue: true, display: 'Jane Doe' });
+      expect(values.get('x_owner')).toEqual({ hasValue: true, display: 'Jane Doe', raw: '00000000-0000-0000-0000-0000000000ff' });
       expect(values.get('x_note')).toEqual({ hasValue: false, display: null });
     });
 
@@ -381,7 +381,7 @@ describe('BPFService stage details', () => {
         { field: 'x_ok', select: 'x_ok', attributeType: 'String' },
         { field: 'x_broken', select: 'x_broken', attributeType: 'String' },
       ]);
-      expect(values.get('x_ok')).toEqual({ hasValue: true, display: 'fine' });
+      expect(values.get('x_ok')).toEqual({ hasValue: true, display: 'fine', raw: 'fine' });
       expect(values.get('x_broken')).toEqual({ hasValue: false, display: null, failed: true });
     });
 
@@ -408,7 +408,7 @@ describe('BPFService stage details', () => {
       ];
       expect((await service.getRecordColumns('opportunity', RECORD_ID, cols)).get('x_flaky')?.failed).toBe(true);
       broken = false;
-      expect((await service.getRecordColumns('opportunity', RECORD_ID, cols)).get('x_flaky')).toEqual({ hasValue: true, display: 'now ok' });
+      expect((await service.getRecordColumns('opportunity', RECORD_ID, cols)).get('x_flaky')).toEqual({ hasValue: true, display: 'now ok', raw: 'now ok' });
     });
 
     it('retries a column of unknown type as a lookup', async () => {
@@ -418,7 +418,7 @@ describe('BPFService stage details', () => {
           : Promise.reject(new Error('400'))
       );
       const values = await service.getRecordColumns('opportunity', RECORD_ID, [{ field: 'x_contact', select: 'x_contact' }]);
-      expect(values.get('x_contact')).toEqual({ hasValue: true, display: 'Ann' });
+      expect(values.get('x_contact')).toEqual({ hasValue: true, display: 'Ann', raw: 'guid' });
     });
 
     it('marks every column failed for invalid input without calling the API', async () => {

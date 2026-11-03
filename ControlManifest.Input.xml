@@ -3,7 +3,7 @@
   <control
     namespace="IWS"
     constructor="BPFViewerPlus"
-    version="1.3.1"
+    version="1.4.0"
     display-name-key="BPFViewerPlus"
     description-key="BPFViewerPlus_Desc"
     control-type="virtual"
@@ -188,6 +188,18 @@
       <value name="comfortable" display-name-key="DensityComfortable">comfortable</value>
       <value name="compact" display-name-key="DensityCompact">compact</value>
     </property>
+
+    <!-- Optional FetchXML for form subgrids. Placeholders like {new_recruitsource},
+         {ownerid} or {id} are filled from the form's record. Ignored in views
+         (home grids) and when empty. -->
+    <property
+      name="subgridFetchXml"
+      display-name-key="SubgridFetchXml"
+      description-key="SubgridFetchXml_Desc"
+      of-type="Multiple"
+      usage="input"
+      required="false"
+    />
 
     <!-- ========================================
          COLOR CONFIGURATION

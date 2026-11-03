@@ -133,6 +133,8 @@ export interface IFieldValue {
   display: string | null;
   /** The value could not be loaded (the column request failed) */
   failed?: boolean;
+  /** Raw Web API value (GUID for lookups, number for option sets), when loaded from the Web API */
+  raw?: unknown;
 }
 
 /**

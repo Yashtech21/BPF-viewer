@@ -16,6 +16,7 @@ export interface IInputs {
     stageAgeWarningDays: ComponentFramework.PropertyTypes.WholeNumberProperty;
     navigationTarget: ComponentFramework.PropertyTypes.EnumProperty<"newWindow" | "sameWindow" | "dialog">;
     density: ComponentFramework.PropertyTypes.EnumProperty<"comfortable" | "compact">;
+    subgridFetchXml: ComponentFramework.PropertyTypes.StringProperty;
     usePlatformTheme: ComponentFramework.PropertyTypes.EnumProperty<"yes" | "no">;
     completedColor: ComponentFramework.PropertyTypes.StringProperty;
     completedTextColor: ComponentFramework.PropertyTypes.StringProperty;

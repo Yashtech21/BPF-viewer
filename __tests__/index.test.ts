@@ -1048,6 +1048,150 @@ describe('BPFViewerPlus', () => {
     });
   });
 
+  describe('form subgrid FetchXML (subgridFetchXml)', () => {
+    const FORM_ID = 'f0000000-0000-4000-8000-00000000000f';
+    const OWNER = '0a000000-0000-4000-8000-0000000000aa';
+    const R1 = '00000000-0000-4000-8000-000000000001';
+    const R2 = '00000000-0000-4000-8000-000000000002';
+    const DATASET_ROW = '00000000-0000-4000-8000-0000000000d1';
+    const TEMPLATE = `<fetch top="5">
+      <entity name="opportunity">
+        <attribute name="createdon" />
+        <order attribute="createdon" descending="true" />
+        <filter>
+          <condition attribute="new_recruitsource" operator="eq" value="{new_recruitsource}" />
+          <condition attribute="ownerid" operator="eq" value="{ownerid}" />
+          <condition attribute="opportunityid" operator="ne" value="{id}" />
+        </filter>
+      </entity>
+    </fetch>`;
+
+    type Mock = jest.Mock;
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    };
+
+    function setup(opts: { template?: string; onForm?: boolean; formValues?: Record<string, unknown> } = {}) {
+      const params = context.parameters as unknown as Record<string, unknown>;
+      params.subgridFetchXml = { raw: opts.template ?? TEMPLATE };
+      if (opts.onForm !== false) {
+        (context.mode as unknown as Record<string, unknown>).contextInfo = { entityId: `{${FORM_ID.toUpperCase()}}`, entityTypeName: 'opportunity' };
+      }
+      // The subgrid's own view has one row, which the query must replace
+      const records = params.records as Record<string, unknown>;
+      records.sortedRecordIds = [DATASET_ROW];
+      records.records = {
+        [DATASET_ROW]: {
+          getRecordId: () => DATASET_ROW,
+          getValue: () => 'View row',
+          getFormattedValue: () => 'View row',
+          getNamedReference: () => ({ id: DATASET_ROW, name: 'View row', entityType: 'opportunity' }),
+        },
+      };
+      records.columns = [{ name: 'name', isPrimary: true }];
+      records.loading = false;
+
+      (context.utils as unknown as { getEntityMetadata: Mock }).getEntityMetadata = jest.fn().mockImplementation(
+        async (_entity: string, attrs?: string[]) =>
+          attrs
+            ? { Attributes: { get: (n: string) => (n === 'ownerid' ? { DisplayName: 'Owner', AttributeType: 9 } : { DisplayName: 'Recruit Source', AttributeType: 11 }) } }
+            : { PrimaryIdAttribute: 'opportunityid', PrimaryNameAttribute: 'name', DisplayName: 'Opportunity' }
+      );
+      const formValues = opts.formValues ?? { new_recruitsource: 100000001, _ownerid_value: OWNER };
+      const retrieveRecord = jest.fn().mockResolvedValue(formValues);
+      const retrieveMultiple = jest.fn().mockResolvedValue({
+        entities: [
+          { opportunityid: R1, name: 'Deal one', createdon: '2026-10-01' },
+          { opportunityid: R2, name: 'Deal two', createdon: '2026-09-01' },
+        ],
+      });
+      const webAPI = context.webAPI as unknown as { retrieveRecord: Mock; retrieveMultipleRecords: Mock };
+      webAPI.retrieveRecord = retrieveRecord;
+      webAPI.retrieveMultipleRecords = retrieveMultiple;
+      jest.spyOn(BPFService.prototype, 'getBPFDataForRecord').mockResolvedValue(null);
+      return { retrieveRecord, retrieveMultiple };
+    }
+
+    const props = () => control.updateView(context).props;
+
+    it('fills placeholders from the form record, runs the query and shows its rows instead of the view', async () => {
+      const { retrieveRecord, retrieveMultiple } = setup();
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+
+      // Only the placeholder columns are read from the form record; the owner lookup as _ownerid_value
+      expect(retrieveRecord).toHaveBeenCalledWith('opportunity', FORM_ID, '?$select=new_recruitsource,_ownerid_value');
+
+      const [entity, query] = retrieveMultiple.mock.calls[0];
+      expect(entity).toBe('opportunity');
+      const xml = decodeURIComponent(String(query).replace('?fetchXml=', ''));
+      expect(xml).toContain('value="100000001"');
+      expect(xml).toContain(`value="${OWNER}"`);
+      expect(xml).toContain(`value="${FORM_ID}"`); // {id} = the form record
+      expect(xml).toContain('<attribute name="opportunityid"'); // primary id added for the grid
+      expect(xml).toContain('top="5"');
+
+      const rows = props().records as Array<{ recordId: string; recordName: string; entityName: string }>;
+      expect(rows.map(r => [r.recordId, r.recordName, r.entityName])).toEqual([
+        [R1, 'Deal one', 'opportunity'],
+        [R2, 'Deal two', 'opportunity'],
+      ]);
+      expect(BPFService.prototype.getBPFDataForRecord).toHaveBeenCalledWith(R1, 'opportunity', expect.anything(), expect.anything());
+    });
+
+    it('is ignored in a view (no form record): the dataset rows are shown, nothing extra is fetched', async () => {
+      const { retrieveRecord, retrieveMultiple } = setup({ onForm: false });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+
+      expect(retrieveRecord).not.toHaveBeenCalled();
+      expect(retrieveMultiple).not.toHaveBeenCalled();
+      expect((props().records as Array<{ recordId: string }>).map(r => r.recordId)).toEqual([DATASET_ROW]);
+    });
+
+    it('is optional: an empty template keeps the subgrid view on a form', async () => {
+      const { retrieveMultiple } = setup({ template: '   ' });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(retrieveMultiple).not.toHaveBeenCalled();
+      expect((props().records as Array<{ recordId: string }>).map(r => r.recordId)).toEqual([DATASET_ROW]);
+    });
+
+    it('explains instead of querying when a placeholder is empty on the form record', async () => {
+      const { retrieveMultiple } = setup({ formValues: { new_recruitsource: null, _ownerid_value: OWNER } });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(retrieveMultiple).not.toHaveBeenCalled();
+      expect(props().error).toBe('No records to show: Recruit Source is empty on this record.');
+      expect(props().records).toEqual([]);
+    });
+
+    it('reports invalid FetchXML without querying', async () => {
+      const { retrieveMultiple } = setup({ template: '<fetch><entity name="opportunity">' });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(retrieveMultiple).not.toHaveBeenCalled();
+      expect(props().error).toMatch(/FetchXML filter isn't valid/);
+    });
+
+    it('supports a template without placeholders (e.g. top 5 recently created)', async () => {
+      const { retrieveRecord, retrieveMultiple } = setup({
+        template: '<fetch top="5"><entity name="opportunity"><order attribute="createdon" descending="true"/></entity></fetch>',
+      });
+      control.init(context, notifyOutputChanged);
+      control.updateView(context);
+      await flush();
+      expect(retrieveRecord).not.toHaveBeenCalled();
+      expect(retrieveMultiple).toHaveBeenCalledTimes(1);
+      expect((props().records as Array<{ recordId: string }>).map(r => r.recordId)).toEqual([R1, R2]);
+    });
+  });
+
   describe('handleNavigate', () => {
     it('calls navigation.openForm when invoked with valid params', () => {
       control.init(context, notifyOutputChanged);
@@ -1360,7 +1504,7 @@ describe('BPFViewerPlus', () => {
       // Only the two missing columns were requested; the lookup as _x_value
       expect(retrieveRecord).toHaveBeenCalledTimes(1);
       expect(retrieveRecord).toHaveBeenCalledWith('opportunity', recordId, '?$select=_parentcontactid_value,x_offerlettersent');
-      expect(values.get('parentcontactid')).toEqual({ hasValue: true, display: 'Jane Doe' });
+      expect(values.get('parentcontactid')).toEqual({ hasValue: true, display: 'Jane Doe', raw: 'guid' });
       expect(values.get('x_offerlettersent')).toEqual({ hasValue: false, display: null });
     });
 

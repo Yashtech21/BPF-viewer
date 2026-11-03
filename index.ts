@@ -40,6 +40,15 @@ import { ViewStore } from './utils/viewStore';
 import { readAttributeInfo, isLookupType } from './utils/fieldMetadata';
 import { formatRawValue, isEmptyValue } from './utils/stageDetails';
 import { withFallback } from './utils/async';
+import { normGuid } from './utils/processDefinition';
+import {
+  FetchTemplateError,
+  ID_PLACEHOLDER,
+  applyPlaceholders,
+  extractPlaceholders,
+  prepareFetch,
+  toFetchValue,
+} from './utils/fetchTemplate';
 
 /**
  * How many records are fetched in parallel. Rows still update one by one as
@@ -67,6 +76,8 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
   private entityDisplayNameCache: Map<string, string> = new Map();
   /** entity|field -> field metadata (display name, field security) */
   private fieldInfoCache: Map<string, IFieldInfo> = new Map();
+  /** entity -> primary id/name attribute logical names */
+  private primaryAttributeCache: Map<string, { id: string; name: string }> = new Map();
   /** entity|field -> in-flight metadata request covering that field */
   private fieldInfoPending: Map<string, Promise<void>> = new Map();
 
@@ -239,7 +250,7 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
       p.designStyle?.raw, p.displayMode?.raw, p.recordNameSize?.raw, p.showEntityName?.raw,
       p.enableNavigation?.raw, p.showPulseAnimation?.raw, p.usePlatformTheme?.raw,
       p.enableStageDetails?.raw, p.showToolbar?.raw, p.stageAgeWarningDays?.raw,
-      p.navigationTarget?.raw, p.density?.raw,
+      p.navigationTarget?.raw, p.density?.raw, p.subgridFetchXml?.raw,
       p.completedColor?.raw, p.completedTextColor?.raw, p.activeColor?.raw,
       p.activeTextColor?.raw, p.inactiveColor?.raw, p.inactiveTextColor?.raw,
     ].join('_');
@@ -295,7 +306,35 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     const signal = this.abortController.signal;
     const currentGeneration = ++this.requestGeneration;
 
-    const recordIds = dataset.sortedRecordIds || [];
+    // Rows: from the configured FetchXML when this is a form subgrid with a
+    // template, otherwise from the subgrid/view dataset
+    let recordIds = dataset.sortedRecordIds || [];
+    let fetchedNames: Map<string, string> | null = null;
+    let fetchedEntity: string | null = null;
+
+    const template = (this.context.parameters.subgridFetchXml?.raw ?? '').trim();
+    const host = template ? this.getHostRecord() : null;
+    if (template && host) {
+      try {
+        const result = await this.runFetchTemplate(template, host, signal);
+        if (signal.aborted || currentGeneration !== this.requestGeneration) return;
+        recordIds = result.ids;
+        fetchedNames = result.names;
+        fetchedEntity = result.entityName;
+        this.error = null;
+      } catch (e) {
+        if (signal.aborted || currentGeneration !== this.requestGeneration) return;
+        // Template problems (empty placeholder, invalid XML) are expected states, not crashes
+        if (e instanceof FetchTemplateError) logger.warn('Form subgrid FetchXML not run:', e.message);
+        else logger.error('Form subgrid FetchXML failed:', e);
+        this.records = [];
+        this.error = e instanceof FetchTemplateError ? e.message : getErrorMessage(e);
+        this.isLoading = false;
+        this.publish();
+        return;
+      }
+    }
+
     if (recordIds.length === 0) {
       this.records = [];
       this.isLoading = false;
@@ -306,8 +345,9 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
     const perf = createPerfTracker(`processDataset (${recordIds.length} records)`);
 
     // Get entity name from first record (cast to IDatasetRecord for getNamedReference support)
-    const firstRecord = dataset.records[recordIds[0]] as unknown as IDatasetRecord;
-    const entityName = firstRecord.getNamedReference?.()?.entityType ||
+    const firstRecord = dataset.records[recordIds[0]] as unknown as IDatasetRecord | undefined;
+    const entityName = fetchedEntity ||
+                       firstRecord?.getNamedReference?.()?.entityType ||
                        this.getEntityNameFromConfig();
 
     // Build initial records and identify which need fetching
@@ -337,9 +377,10 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     for (const recordId of recordIds) {
       const record = dataset.records[recordId];
-      const recordName = primaryColumn
-        ? record.getFormattedValue(primaryColumn.name) || recordId
-        : recordId;
+      const recordName =
+        fetchedNames?.get(recordId) ||
+        (record && primaryColumn ? record.getFormattedValue(primaryColumn.name) : '') ||
+        recordId;
 
       const existingRecord = existingRecordMap.get(recordId);
 
@@ -467,6 +508,110 @@ export class BPFViewerPlus implements ComponentFramework.ReactControl<IInputs, I
 
     this.entityDisplayNameCache.set(entityName, fallback);
     return fallback;
+  }
+
+  /**
+   * The record of the form hosting this control, when it's a form subgrid.
+   * In a view (home grid), on a dashboard or on an unsaved form there is none.
+   */
+  private getHostRecord(): { entityName: string; id: string } | null {
+    // contextInfo is set by model-driven apps for subgrids; page is the fallback
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = (this.context.mode as any)?.contextInfo;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = (this.context as any)?.page;
+    const id = normGuid(info?.entityId || page?.entityId);
+    const entityName = String(info?.entityTypeName || page?.entityTypeName || '');
+    return isValidGuid(id) && isValidEntityName(entityName) ? { entityName, id } : null;
+  }
+
+  /**
+   * Fill the FetchXML template from the form's record and run it.
+   * {id} is the form record's id; any other {field} is that field's saved
+   * value on the form record (lookups as GUIDs, option sets as numbers).
+   */
+  private async runFetchTemplate(
+    template: string,
+    host: { entityName: string; id: string },
+    signal: AbortSignal
+  ): Promise<{ entityName: string; ids: string[]; names: Map<string, string> }> {
+    const service = this.bpfService!;
+    const placeholders = extractPlaceholders(template);
+    const fields = placeholders.filter(p => p !== ID_PLACEHOLDER);
+    const values: Record<string, string | null> = { [ID_PLACEHOLDER]: host.id };
+
+    if (fields.length > 0) {
+      const info = await withFallback(this.getFieldInfo(host.entityName, fields), 4000, new Map<string, IFieldInfo>(), `Field types for ${host.entityName}`);
+      const read = await service.getRecordColumns(
+        host.entityName,
+        host.id,
+        fields.map(field => {
+          const attributeType = info.get(field)?.attributeType;
+          return { field, select: isLookupType(attributeType) ? `_${field}_value` : field, attributeType };
+        })
+      );
+      const failed = fields.filter(f => read.get(f)?.failed);
+      if (failed.length) {
+        throw new FetchTemplateError(
+          `Couldn't read ${failed.join(', ')} from this ${host.entityName} to filter the list.`,
+          'read-failed',
+          failed
+        );
+      }
+      for (const field of fields) values[field] = toFetchValue(read.get(field)?.raw);
+    }
+
+    const { xml, missing } = applyPlaceholders(template, values);
+    if (missing.length) {
+      const labels = await withFallback(this.getFieldInfo(host.entityName, missing), 2000, new Map<string, IFieldInfo>(), 'Field labels');
+      const names = missing.map(f => labels.get(f)?.displayName || f);
+      throw new FetchTemplateError(
+        `No records to show: ${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} empty on this record.`,
+        'missing-values',
+        missing
+      );
+    }
+
+    const entityName = prepareFetch(xml).entityName; // validates before any metadata call
+    const primary = await this.getPrimaryAttributes(entityName);
+    const prepared = prepareFetch(xml, [primary.id, primary.name]);
+    const rows = await service.executeFetchXml(entityName, prepared.toString(), signal);
+
+    const ids: string[] = [];
+    const names = new Map<string, string>();
+    for (const row of rows) {
+      const id = normGuid(row[primary.id] as string);
+      if (!isValidGuid(id) || ids.includes(id)) continue;
+      ids.push(id);
+      const name = row[`${primary.name}@OData.Community.Display.V1.FormattedValue`] ?? row[primary.name];
+      if (typeof name === 'string' && name) names.set(id, name);
+    }
+    return { entityName, ids, names };
+  }
+
+  /** Primary id / name attribute of a table (metadata, cached), with conventional fallbacks */
+  private async getPrimaryAttributes(entityName: string): Promise<{ id: string; name: string }> {
+    const cached = this.primaryAttributeCache.get(entityName);
+    if (cached) return cached;
+    let id = `${entityName}id`;
+    let name = 'name';
+    try {
+      const metadata = await withFallback(
+        Promise.resolve(this.context.utils?.getEntityMetadata?.(entityName)),
+        4000,
+        undefined,
+        `Metadata for ${entityName}`
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const md = metadata as any;
+      id = md?.PrimaryIdAttribute || id;
+      name = md?.PrimaryNameAttribute || name;
+    } catch {
+      // conventional names
+    }
+    const result = { id: id.toLowerCase(), name: name.toLowerCase() };
+    this.primaryAttributeCache.set(entityName, result);
+    return result;
   }
 
   /**

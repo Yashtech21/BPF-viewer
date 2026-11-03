@@ -271,4 +271,10 @@
   <data name="DensityCompact" xml:space="preserve">
     <value>Compact</value>
   </data>
+  <data name="SubgridFetchXml" xml:space="preserve">
+    <value>Form Subgrid FetchXML (optional)</value>
+  </data>
+  <data name="SubgridFetchXml_Desc" xml:space="preserve">
+    <value>Only used when the control is a subgrid on a form. A FetchXML query whose results replace the subgrid's rows. Placeholders such as {new_recruitsource}, {ownerid}, {createdby} or {id} are replaced with values from the form's record. Leave empty to show the subgrid's own view.</value>
+  </data>
 </root>
